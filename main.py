@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(
     title="Art Concierge",
     description="A personal art concierge for cultural discovery, artwork research and acquisition.",
-    version="0.2.0",
+    version="0.3.0",
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -24,7 +24,27 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(request=request, name="home.html", context={"page": "home"})
+
+
+@app.get("/concierge", response_class=HTMLResponse)
+async def concierge_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="concierge.html", context={"page": "concierge"})
+
+
+@app.get("/results", response_class=HTMLResponse)
+async def results_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="results.html", context={"page": "results"})
+
+
+@app.get("/saved", response_class=HTMLResponse)
+async def saved_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="saved.html", context={"page": "saved"})
+
+
+@app.get("/taste", response_class=HTMLResponse)
+async def taste_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="taste.html", context={"page": "taste"})
 
 
 @app.get("/health")

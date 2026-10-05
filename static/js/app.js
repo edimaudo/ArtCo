@@ -1,43 +1,55 @@
 (() => {
-  document.documentElement.dataset.theme = localStorage.getItem('artConciergeTheme') || 'light';
-  document.documentElement.style.colorScheme = document.documentElement.dataset.theme;
-  const savedFontScale = localStorage.getItem('artConciergeFontScale') || 'md';
-  document.documentElement.style.setProperty('--scale', ({ sm: 0.92, md: 1, lg: 1.12 }[savedFontScale] || 1));
-
-  const storedProfile = JSON.parse(localStorage.getItem('artConciergeProfile') || '{}');
-  const state = {
-    view: 'home',
-    intent: 'discover',
-    loves: Array.isArray(storedProfile.loves) ? storedProfile.loves.slice(0, 12) : [],
-    goal: storedProfile.goal || '',
-    discoveryLevel: Number(storedProfile.discoveryLevel ?? 50),
-    saved: JSON.parse(localStorage.getItem('artConciergeSaved') || '[]'),
-    recent: JSON.parse(localStorage.getItem('artConciergeRecent') || '[]'),
-    lastRequest: null,
+  const storage = {
+    profile: 'artConciergeProfile',
+    saved: 'artConciergeSaved',
+    recent: 'artConciergeRecent',
+    last: 'artConciergeLastResult',
   };
 
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const readJson = (key, fallback) => {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) || 'null');
+      return value ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const profile = readJson(storage.profile, {});
+  const state = {
+    profile: {
+      loves: Array.isArray(profile.loves) ? profile.loves.slice(0, 12) : [],
+      notes: String(profile.notes || ''),
+      discoveryLevel: Number(profile.discoveryLevel ?? 50),
+    },
+    saved: readJson(storage.saved, []).slice(0, 40),
+    recent: readJson(storage.recent, []).slice(0, 8),
+    last: readJson(storage.last, null),
+    intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
+  };
+
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
   function saveProfile() {
-    localStorage.setItem('artConciergeProfile', JSON.stringify({
-      loves: state.loves,
-      goal: state.goal,
-      discoveryLevel: state.discoveryLevel,
-    }));
+    localStorage.setItem(storage.profile, JSON.stringify(state.profile));
   }
 
-  function persistRecent(request, resultData) {
+  function saveLastResult(data) {
+    state.last = data;
+    localStorage.setItem(storage.last, JSON.stringify(data));
+  }
+
+  function saveRecent(request, result) {
     const item = {
       id: `${Date.now()}`,
       intent: request.intent,
       prompt: request.goal || intentLabel(request.intent),
       savedAt: new Date().toISOString(),
-      data: resultData,
+      data: result,
     };
-    state.recent = [item, ...state.recent.filter((entry) => entry.prompt !== item.prompt)].slice(0, 6);
-    localStorage.setItem('artConciergeRecent', JSON.stringify(state.recent));
-    renderHomePanels();
+    state.recent = [item, ...state.recent.filter((entry) => entry.prompt !== item.prompt)].slice(0, 8);
+    localStorage.setItem(storage.recent, JSON.stringify(state.recent));
   }
 
   function intentLabel(intent) {
@@ -51,125 +63,176 @@
     }[intent] || 'New request';
   }
 
-  function setView(view) {
-    state.view = view;
-    $$('.view').forEach((section) => {
-      const active = section.dataset.view === view;
-      section.hidden = !active;
-      section.classList.toggle('active', active);
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+    }[char]));
+  }
+
+  function escapeAttribute(value) { return escapeHtml(value); }
+
+  function setActiveNav() {
+    const page = window.ART_CONCIERGE_PAGE || '';
+    $$('[data-page]').forEach((link) => {
+      if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
     });
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    if (view === 'home') renderHomePanels();
-    if (view === 'mytaste') renderTasteProfile();
-    if (view === 'saved') renderSavedPage();
   }
 
-  function renderChips() {
-    const container = $('#loveChips');
-    if (!container) return;
-    container.innerHTML = state.loves.map((value, index) => `
-      <span class="chip">${escapeHtml(value)} <button type="button" aria-label="Remove ${escapeHtml(value)}" data-index="${index}">×</button></span>`).join('');
+  function applyThemeControls() {
+    const theme = localStorage.getItem('artConciergeTheme') || 'light';
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    const font = localStorage.getItem('artConciergeFontScale') || 'md';
+    document.documentElement.style.setProperty('--scale', ({ sm: .92, md: 1, lg: 1.12 }[font] || 1));
+    const select = $('#fontScale');
+    if (select) select.value = font;
+    const button = $('#themeToggle');
+    if (button) button.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
   }
 
-  function addLove(value) {
+  function setupGlobalControls() {
+    $('#themeToggle')?.addEventListener('click', () => {
+      const next = (document.documentElement.dataset.theme || 'light') === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('artConciergeTheme', next);
+      applyThemeControls();
+    });
+    $('#fontScale')?.addEventListener('change', (event) => {
+      const value = event.target.value;
+      localStorage.setItem('artConciergeFontScale', value);
+      document.documentElement.style.setProperty('--scale', ({ sm: .92, md: 1, lg: 1.12 }[value] || 1));
+    });
+  }
+
+  function renderHome() {
+    const recent = $('#recentList');
+    if (!recent) return;
+    if (!state.recent.length) {
+      recent.innerHTML = '<p class="empty-state">Your recent conversations will appear here.</p>';
+    } else {
+      recent.innerHTML = state.recent.slice(0, 4).map((item) => `
+        <div class="recent-item">
+          <div>
+            <div class="recent-title">${escapeHtml(item.prompt)}</div>
+            <div class="recent-meta">${escapeHtml(intentLabel(item.intent))}</div>
+          </div>
+          <button class="secondary-button recent-open" type="button" data-recent-id="${escapeAttribute(item.id)}">Open</button>
+        </div>
+      `).join('');
+    }
+
+    const preview = $('#savedPreview');
+    if (!preview) return;
+    const saved = state.saved.slice(0, 3);
+    preview.innerHTML = saved.length
+      ? saved.map((work) => work.image_url
+        ? `<button class="saved-thumb" type="button" data-saved-id="${escapeAttribute(work.id)}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}"><img src="${escapeAttribute(work.image_url)}" alt=""></button>`
+        : `<button class="saved-thumb no-image" type="button" data-saved-id="${escapeAttribute(work.id)}">${escapeHtml(work.title || 'Saved artwork')}</button>`).join('')
+      : '<p class="empty-state">Save works from a conversation and they will stay here.</p>';
+  }
+
+  function renderTasteInConcierge() {
+    const wrap = $('#savedTaste');
+    const empty = $('#savedTasteEmpty');
+    if (!wrap || !empty) return;
+    wrap.innerHTML = state.profile.loves.map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
+    empty.hidden = state.profile.loves.length > 0;
+  }
+
+  function intentCopy(intent) {
+    return {
+      discover: ['What are you looking for?', 'Start with what you love, then let me take the search somewhere new.'],
+      find: ['What are you looking for?', 'Tell me what you have in mind. I’ll narrow the search around it.'],
+      taste: ['What are you curious about?', 'Give me a few cultural references and I’ll use them to open up new directions.'],
+      curate: ['What should work together?', 'Tell me about the space, mood, or idea you want to bring together.'],
+      buy: ['What would you like to buy?', 'Tell me what you can spend, where you are, and how far you want me to explore.'],
+      keep_discovering: ['What should I explore next?', 'I’ll build from the things you’ve already told me you like.'],
+    }[intent] || ['What are you looking for?', 'Start naturally and I’ll take it from there.'];
+  }
+
+  function setIntent(intent) {
+    state.intent = intent;
+    const [title, lede] = intentCopy(intent);
+    $('#conciergeTitle').textContent = title;
+    $('#conciergeLede').textContent = lede;
+    $$('#intentList button').forEach((button) => {
+      if (button.dataset.intent === intent) button.setAttribute('aria-current', 'true');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
+  function addProfileReference(value) {
     const clean = value.trim().replace(/,$/, '');
-    if (!clean || state.loves.includes(clean) || state.loves.length >= 12) return;
-    state.loves.push(clean);
-    renderChips();
-    $('#loveInput').value = '';
+    if (!clean || state.profile.loves.includes(clean) || state.profile.loves.length >= 12) return;
+    state.profile.loves.push(clean);
     saveProfile();
   }
 
-  function discoveryLabel(value) {
-    if (value < 34) return 'Familiar';
-    if (value < 68) return 'Balanced';
-    return 'Unexpected';
+  function parseBudget(text) {
+    const match = text.replace(/,/g, '').match(/(?:\$|CAD\s?)?(\d{3,7})/i);
+    return match ? Number(match[1]) : null;
   }
 
-  function updateRequestFields() {
-    const buyingContext = ['buy', 'find', 'curate'].includes(state.intent);
-    const countContext = ['buy', 'curate'].includes(state.intent);
-    $('#countBlock').hidden = !countContext;
-    $('#budgetBlock').hidden = !buyingContext;
-    $('#marketBlock').hidden = !buyingContext;
-    $('#mediumBlock').hidden = state.intent === 'taste';
-
-    const titles = {
-      discover: ['A little direction will help.', 'Tell me what you want to explore, and I’ll do the searching.'],
-      find: ['A few details will narrow it down.', 'Tell me enough to understand the brief.'],
-      taste: ['Let’s give your taste a little room.', 'I’ll use your references to introduce you to artists and directions you may not know yet.'],
-      curate: ['What needs to work together?', 'I’ll look for works that make sense individually and as a group.'],
-      buy: ['Tell me what you can act on.', 'I’ll prioritise artwork that is actually available to acquire.'],
-      keep_discovering: ['Let’s keep going from here.', 'I’ll build on what you already like instead of starting from scratch.'],
-    };
-    const [title, lede] = titles[state.intent] || titles.discover;
-    $('#preferenceTitle').textContent = title;
-    $('#preferenceLede').textContent = lede;
-    $('#preferenceContext').textContent = intentLabel(state.intent);
-  }
-
-  function setIntent(intent, quickText = '') {
-    state.intent = intent;
-    $$('.intent-card').forEach((card) => card.classList.toggle('selected', card.dataset.intent === intent));
-    updateRequestFields();
-    if (quickText) $('#goal').value = quickText;
-    setView('taste');
-  }
-
-  function inferIntentFromText(text) {
+  function inferIntent(text) {
     const lower = text.toLowerCase();
-    if (/buy|purchase|acquire|price|budget/.test(lower)) return 'buy';
+    if (/buy|purchase|acquire|for sale|budget|price/.test(lower)) return 'buy';
     if (/curate|collection|set of|several/.test(lower)) return 'curate';
-    if (/specific|looking for|need a/.test(lower)) return 'find';
-    if (/taste|learn|understand what i like/.test(lower)) return 'taste';
+    if (/learn.*taste|develop.*taste|understand.*like/.test(lower)) return 'taste';
+    if (/specific|looking for|need a|find me/.test(lower)) return 'find';
     if (/again|continue|keep/.test(lower)) return 'keep_discovering';
     return 'discover';
   }
 
-  function getChecked(name) {
-    return $$(`input[name="${name}"]:checked`).map((el) => el.value);
-  }
-
-  function buildPayload() {
+  function buildRequest(prompt, feedback = null, explicitIntent = null) {
+    const inferred = explicitIntent || inferIntent(prompt);
+    const budget = parseBudget(prompt);
     return {
-      intent: state.intent,
-      loves: [...state.loves],
+      intent: inferred,
+      loves: [...state.profile.loves],
       additional_interests: [],
-      art_interests: getChecked('art'),
-      mediums: getChecked('medium'),
+      art_interests: [],
+      mediums: [],
       budget_min: null,
-      budget_max: $('#budgetMax').value ? Number($('#budgetMax').value) : null,
-      room: $('#room').value || null,
-      preferred_market: $('#preferredMarket').value || null,
+      budget_max: budget,
+      room: null,
       size_preference: null,
-      goal: ($('#goal').value || state.goal || '').trim() || null,
-      discovery_level: Number($('#discovery').value || state.discoveryLevel),
-      purchase_required: state.intent === 'buy',
-      number_of_works: Number($('#numberOfWorks').value || 1),
+      preferred_market: null,
+      discovery_level: state.profile.discoveryLevel,
+      purchase_required: inferred === 'buy',
+      goal: prompt.trim() || null,
+      number_of_works: inferred === 'curate' ? 3 : 1,
+      feedback,
     };
   }
 
-  function beginQuickRequest() {
-    const text = $('#quickPrompt').value.trim();
-    if (!text) {
-      setIntent('discover');
-      return;
-    }
-    const inferred = inferIntentFromText(text);
-    setIntent(inferred, text);
+  function beginRequest(prompt) {
+    const clean = String(prompt || '').trim();
+    if (!clean) return;
+    const inferred = state.intent && new URLSearchParams(window.location.search).has('intent') ? state.intent : inferIntent(clean);
+    window.location.href = `/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`;
+    sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(buildRequest(clean, null, inferred)));
   }
 
-  async function runConcierge(feedback = null) {
-    const payload = state.lastRequest ? { ...state.lastRequest } : buildPayload();
-    if (feedback) payload.feedback = feedback;
-    state.lastRequest = payload;
-    saveProfile();
-    setView('research');
-    $('#researchHeading').textContent = feedback ? 'I’m refining it.' : 'I’m on it.';
-    $('#researchMessage').textContent = feedback
-      ? 'I’m adjusting the search based on what you told me.'
-      : 'I’m looking through the art world for the strongest matches.';
-    $('#researchDetail').textContent = 'Searching, comparing and narrowing the field.';
+  async function runPendingRequest() {
+    const raw = sessionStorage.getItem('artConciergePendingRequest');
+    if (!raw) return false;
+    sessionStorage.removeItem('artConciergePendingRequest');
+    let payload;
+    try { payload = JSON.parse(raw); } catch { return false; }
+    const resultsPage = $('#resultsPage');
+    if (!resultsPage) return false;
+
+    const resultsHeading = $('#resultsHeading');
+    const resultsSummary = $('#resultsSummary');
+    const resultsMeta = $('#resultsMeta');
+    const grid = $('#artGrid');
+    const notForSaleSection = $('#notForSaleSection');
+
+    resultsHeading.textContent = 'I’m researching that now.';
+    resultsSummary.textContent = 'Your concierge is connecting your request with your existing taste and looking across the available art sources.';
+    resultsMeta.textContent = '';
+    grid.innerHTML = '<p class="empty-state">Searching and narrowing the field…</p>';
+    notForSaleSection.hidden = true;
 
     try {
       const response = await fetch('/api/concierge', {
@@ -178,35 +241,67 @@
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => null);
-        throw new Error(errorPayload?.detail?.[0]?.msg || errorPayload?.detail || `Request failed (${response.status})`);
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail?.[0]?.msg || detail?.detail || `Request failed (${response.status})`);
       }
       const data = await response.json();
-      storeResultState(data);
+      data.request = payload;
+      saveLastResult(data);
+      saveRecent(payload, data);
       renderResults(data);
-      persistRecent(payload, data);
+      return true;
     } catch (error) {
-      $('#researchHeading').textContent = 'I couldn’t complete that search.';
-      $('#researchMessage').textContent = error.message;
-      $('#researchDetail').textContent = 'Check your connected services and try again.';
+      resultsHeading.textContent = 'I couldn’t complete that search.';
+      resultsSummary.textContent = error.message || 'Please try again.';
+      resultsMeta.textContent = '';
+      grid.innerHTML = '<p class="empty-state">Check your connected services, then try the request again.</p>';
+      return false;
     }
   }
 
   function renderTasteSummary(data) {
-    const resolved = data.taste?.resolved || [];
-    const artists = data.taste?.related_artists || [];
+    const box = $('#tasteSummary');
+    if (!box) return;
     const inputs = data.taste?.inputs || [];
-    const tags = [...inputs.slice(0, 5), ...artists.slice(0, 3).map((artist) => artist.name)].filter(Boolean);
-    if (!tags.length) {
-      $('#tasteSummary').hidden = true;
-      return;
-    }
-    $('#tasteSummary').hidden = false;
-    const resolvedCount = resolved.length;
-    $('#tasteSummaryCopy').textContent = resolvedCount
-      ? `I used ${resolvedCount} of your cultural references to shape the search.`
-      : 'I used the references and preferences you gave me to shape the search.';
-    $('#tasteTags').innerHTML = [...new Set(tags)].map((tag) => `<span class="taste-tag">${escapeHtml(tag)}</span>`).join('');
+    const artists = data.taste?.related_artists || [];
+    const tags = [...new Set([...inputs, ...artists.slice(0, 4).map((artist) => artist.name)].filter(Boolean))].slice(0, 8);
+    if (!tags.length) { box.hidden = true; return; }
+    box.hidden = false;
+    $('#tasteSummaryCopy').textContent = 'The search was shaped by the cultural references you have shared with your concierge.';
+    $('#tasteTags').innerHTML = tags.map((tag) => `<span class="taste-tag">${escapeHtml(tag)}</span>`).join('');
+  }
+
+  function renderCard(work) {
+    const available = work.availability === 'available' && work.source_kind === 'commercial';
+    const availability = available ? 'available' : 'not_for_sale';
+    const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
+    const image = work.image_url
+      ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
+      : '<div class="art-placeholder">Image unavailable</div>';
+    const linkLabel = available ? 'View artwork' : 'See at source';
+    const link = work.detail_url
+      ? `<a class="card-action" href="${escapeAttribute(work.detail_url)}" target="_blank" rel="noopener noreferrer">${linkLabel} →</a>`
+      : '';
+    const saved = state.saved.some((item) => item.id === work.id);
+    const reasons = (work.why || []).map((item) => String(item)).join(' · ');
+    const id = escapeAttribute(work.id);
+    return `
+      <article class="art-card" data-art-id="${id}">
+        <div class="art-image-wrap">${image}</div>
+        <div class="art-body">
+          <div class="art-title">${escapeHtml(work.title || 'Untitled')}</div>
+          <div class="art-artist">${escapeHtml(work.artist || 'Unknown artist')}</div>
+          <div class="art-meta">${escapeHtml(meta || work.source || '')}</div>
+          <div class="art-reason">${escapeHtml(reasons)}</div>
+          <div class="art-footer"><span class="availability ${availability}">${available ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE'}</span><span class="art-source">${escapeHtml(work.source || '')}</span></div>
+          <div class="art-actions">
+            ${link}
+            <button class="card-action save-action" type="button" data-id="${id}" aria-pressed="${saved}">${saved ? 'Saved' : 'Save'}</button>
+            <button class="card-action feedback-action" type="button" data-feedback="More like ${escapeAttribute(work.artist || work.title)}">More like this</button>
+            <button class="card-action feedback-action" type="button" data-feedback="Not for me: ${escapeAttribute(work.artist || work.title)}">Not for me</button>
+          </div>
+        </div>
+      </article>`;
   }
 
   function renderResults(data) {
@@ -225,272 +320,187 @@
     $('#resultsMeta').textContent = intent === 'buy'
       ? (available ? `${available} purchase option${available === 1 ? '' : 's'} found` : 'No purchase inventory found')
       : `${data.total_found || 0} works researched`;
-
     const results = data.results || [];
-    const notForSale = data.not_for_sale || [];
     $('#artGrid').innerHTML = results.length
       ? results.map(renderCard).join('')
-      : `<div class="empty-state">${escapeHtml(intent === 'buy' ? 'I could not find purchase inventory in the connected commercial sources.' : 'I could not find strong matches. Try another reference or adjust the brief.')}</div>`;
+      : `<p class="empty-state">${escapeHtml(intent === 'buy' ? 'I could not find purchase inventory in the connected commercial sources.' : 'I could not find strong matches. Refine the request and I’ll search again.')}</p>`;
 
+    const notForSale = data.not_for_sale || [];
     $('#notForSaleSection').hidden = !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');
       $('#notForSaleHint').textContent = intent === 'buy'
         ? 'These works are not currently available to acquire, but they are relevant to what you asked me to find.'
-        : 'These works are relevant references from institutional collections.';
+        : 'These works are useful references from institutional collections.';
     }
     renderTasteSummary(data);
-    setView('results');
   }
 
-  function renderCard(work) {
-    const isAvailable = work.availability === 'available';
-    const availability = isAvailable ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE';
-    const price = work.price_label || '';
-    const meta = [work.medium, work.dimensions, work.year, price].filter(Boolean).join(' · ');
-    const image = work.image_url
-      ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title)} by ${escapeAttribute(work.artist)}" loading="lazy">`
-      : '<div class="art-placeholder">Image unavailable</div>';
-    const linkLabel = isAvailable ? 'View artwork →' : 'See at source →';
-    const link = work.detail_url
-      ? `<a class="card-action" href="${escapeAttribute(work.detail_url)}" target="_blank" rel="noopener noreferrer">${linkLabel}</a>`
-      : '';
-    const saved = state.saved.some((item) => item.id === work.id);
-    const reasons = (work.why || []).map((reason) => cleanReason(reason)).join(' · ');
-    const cardId = escapeAttribute(work.id);
-    return `
-      <article class="art-card" data-art-id="${cardId}">
-        <div class="art-image-wrap">${image}</div>
-        <div class="art-body">
-          <div class="art-title">${escapeHtml(work.title || 'Untitled')}</div>
-          <div class="art-artist">${escapeHtml(work.artist || 'Unknown artist')}</div>
-          <div class="art-meta">${escapeHtml(meta || work.source || '')}</div>
-          <div class="art-reason">${escapeHtml(reasons)}</div>
-          <div class="art-footer"><span class="availability ${work.availability}">${availability}</span><span class="art-source">${escapeHtml(work.source || '')}</span></div>
-          <div class="art-actions">
-            ${link}
-            <button class="card-action save-action" type="button" data-id="${cardId}" aria-pressed="${saved}">${saved ? 'Saved' : 'Save'}</button>
-            <button class="card-action feedback-action" type="button" data-feedback="More like ${escapeAttribute(work.artist || work.title)}">More like this</button>
-            <button class="card-action feedback-action" type="button" data-feedback="Not for me: ${escapeAttribute(work.artist || work.title)}">Not for me</button>
-          </div>
-        </div>
-      </article>`;
-  }
-
-  function cleanReason(reason) {
-    return String(reason || '');
-  }
-
-  function collectArtworkById(id) {
-    const source = document.querySelector(`[data-art-id="${cssEscape(id)}"]`);
-    return state.lastResults?.find((item) => item.id === id)
-      || state.lastNotForSale?.find((item) => item.id === id)
+  function getArtworkById(id) {
+    return state.last?.results?.find((work) => work.id === id)
+      || state.last?.not_for_sale?.find((work) => work.id === id)
+      || state.saved.find((work) => work.id === id)
       || null;
   }
 
   function toggleSave(id) {
-    const artwork = collectArtworkById(id);
+    const artwork = getArtworkById(id);
     if (!artwork) return;
     const index = state.saved.findIndex((item) => item.id === id);
     if (index >= 0) state.saved.splice(index, 1);
     else state.saved.unshift(artwork);
-    localStorage.setItem('artConciergeSaved', JSON.stringify(state.saved.slice(0, 30)));
-    renderResults({
-      intent: state.lastRequest?.intent || state.intent,
-      summary: state.lastResultsSummary || '',
-      results: state.lastResults || [],
-      not_for_sale: state.lastNotForSale || [],
-      purchase_available: state.lastPurchaseAvailable || 0,
-      total_found: state.lastTotalFound || 0,
-      taste: state.lastTaste || {},
-    });
-  }
-
-  function renderHomePanels() {
-    const recent = $('#recentList');
-    if (!state.recent.length) {
-      recent.innerHTML = '<div class="empty-state">Your requests will appear here as you work with your concierge.</div>';
-    } else {
-      recent.innerHTML = state.recent.map((item) => `
-        <div class="recent-item">
-          <div class="recent-copy">
-            <div class="recent-title">${escapeHtml(item.prompt)}</div>
-            <div class="recent-meta">${escapeHtml(intentLabel(item.intent))}</div>
-          </div>
-          <button class="secondary-button recent-open" type="button" data-recent-id="${escapeAttribute(item.id)}">Open</button>
-        </div>`).join('');
-    }
-    $('#recentNote').textContent = state.recent.length ? `${state.recent.length} saved` : '';
-
-    const preview = $('#savedPreview');
-    const saved = state.saved.slice(0, 3);
-    preview.innerHTML = saved.length
-      ? saved.map((work) => work.image_url
-        ? `<button class="saved-thumb" type="button" data-saved-id="${escapeAttribute(work.id)}" aria-label="Open ${escapeAttribute(work.title)}"><img src="${escapeAttribute(work.image_url)}" alt=""></button>`
-        : `<button class="saved-thumb no-image" type="button" data-saved-id="${escapeAttribute(work.id)}">${escapeHtml(work.title || 'Saved art')}</button>`).join('')
-      : '<div class="empty-state">Save works here when you find something you want to revisit.</div>';
+    state.saved = state.saved.slice(0, 40);
+    localStorage.setItem(storage.saved, JSON.stringify(state.saved));
+    if (window.ART_CONCIERGE_PAGE === 'results' && state.last) renderResults(state.last);
+    if (window.ART_CONCIERGE_PAGE === 'saved') renderSavedPage();
   }
 
   function renderSavedPage() {
     const grid = $('#savedGrid');
-    grid.innerHTML = state.saved.length
-      ? state.saved.map(renderCard).join('')
-      : '<div class="empty-state">Nothing saved yet.</div>';
+    if (!grid) return;
+    if (!state.saved.length) {
+      grid.innerHTML = '<p class="empty-state">You have not saved any works yet. Start a conversation with your concierge to find something worth keeping.</p>';
+      return;
+    }
+    grid.innerHTML = state.saved.map(renderCard).join('');
   }
 
-  function renderTasteProfile() {
-    const container = $('#tasteProfileChips');
-    const empty = $('#tasteProfileEmpty');
-    container.innerHTML = state.loves.map((value, index) => `
-      <span class="chip">${escapeHtml(value)} <button type="button" data-profile-index="${index}" aria-label="Remove ${escapeHtml(value)}">×</button></span>`).join('');
-    empty.hidden = state.loves.length > 0;
+  function renderTastePage() {
+    const chips = $('#tasteChips');
+    const notes = $('#tasteNotes');
+    if (!chips || !notes) return;
+    chips.innerHTML = state.profile.loves.map((value, index) => `
+      <span class="chip">${escapeHtml(value)} <button type="button" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)}">×</button></span>
+    `).join('');
+    notes.value = state.profile.notes;
   }
 
-  function loadRecent(id) {
-    const item = state.recent.find((entry) => entry.id === id);
-    if (!item?.data) return;
-    state.lastRequest = {
-      intent: item.data.intent || item.intent,
-      loves: [...state.loves],
-      goal: item.prompt,
-      art_interests: [],
-      mediums: [],
-      budget_min: null,
-      budget_max: null,
-      room: null,
-      preferred_market: null,
-      discovery_level: state.discoveryLevel,
-      purchase_required: item.intent === 'buy',
-      number_of_works: 1,
-    };
-    state.lastResults = item.data.results || [];
-    state.lastNotForSale = item.data.not_for_sale || [];
-    state.lastResultsSummary = item.data.summary || '';
-    state.lastPurchaseAvailable = item.data.purchase_available || 0;
-    state.lastTotalFound = item.data.total_found || 0;
-    state.lastTaste = item.data.taste || {};
-    renderResults(item.data);
-  }
+  function handleGlobalClicks() {
+    document.addEventListener('click', (event) => {
+      const save = event.target.closest('.save-action');
+      if (save) { toggleSave(save.dataset.id); return; }
 
-  function cssEscape(value) {
-    if (window.CSS?.escape) return window.CSS.escape(value);
-    return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-  }
-  function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[char]); }
-  function escapeAttribute(value) { return escapeHtml(value); }
-
-  // Intent shortcuts
-  $$('.intent-card').forEach((card) => card.addEventListener('click', () => setIntent(card.dataset.intent)));
-  $('#quickStart').addEventListener('click', beginQuickRequest);
-  $('#quickPrompt').addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') beginQuickRequest();
-  });
-
-  // Taste input
-  $('#loveInput').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); addLove(event.target.value); }
-  });
-  $('#loveInput').addEventListener('blur', (event) => { if (event.target.value.trim()) addLove(event.target.value); });
-  $('#loveChips').addEventListener('click', (event) => {
-    const index = event.target.dataset.index;
-    if (index !== undefined) { state.loves.splice(Number(index), 1); renderChips(); saveProfile(); }
-  });
-  $('#tasteContinue').addEventListener('click', () => {
-    state.goal = $('#goal').value.trim();
-    saveProfile();
-    setView('preferences');
-  });
-
-  // Preferences
-  $('#discovery').value = String(state.discoveryLevel);
-  $('#discoveryValue').textContent = discoveryLabel(state.discoveryLevel);
-  $('#discovery').addEventListener('input', (event) => {
-    state.discoveryLevel = Number(event.target.value);
-    $('#discoveryValue').textContent = discoveryLabel(state.discoveryLevel);
-    saveProfile();
-  });
-  $('#researchButton').addEventListener('click', () => {
-    state.lastRequest = buildPayload();
-    runConcierge();
-  });
-
-  // Results
-  $('#resultsView')?.addEventListener('click', () => {});
-  document.body.addEventListener('click', (event) => {
-    const save = event.target.closest('.save-action');
-    if (save) toggleSave(save.dataset.id);
-
-    const feedback = event.target.closest('.feedback-action');
-    if (feedback && state.lastRequest) runConcierge(feedback.dataset.feedback);
-
-    const recent = event.target.closest('.recent-open');
-    if (recent) loadRecent(recent.dataset.recentId);
-
-    const savedThumb = event.target.closest('.saved-thumb');
-    if (savedThumb) {
-      const artwork = state.saved.find((item) => item.id === savedThumb.dataset.savedId);
-      if (artwork) {
-        state.lastResults = [artwork];
-        state.lastNotForSale = [];
-        state.lastResultsSummary = 'Saved from an earlier conversation with your concierge.';
-        state.lastRequest = { intent: 'find', loves: state.loves, goal: artwork.title, art_interests: [], mediums: [], budget_min: null, budget_max: null, room: null, preferred_market: null, discovery_level: state.discoveryLevel, purchase_required: false, number_of_works: 1 };
-        renderResults({ intent: 'find', summary: state.lastResultsSummary, results: [artwork], not_for_sale: [], purchase_available: artwork.availability === 'available' ? 1 : 0, total_found: 1, taste: { inputs: state.loves } });
+      const feedback = event.target.closest('.feedback-action');
+      if (feedback) {
+        const input = $('#feedback');
+        if (input) { input.value = feedback.dataset.feedback || ''; input.focus(); }
+        return;
       }
-    }
 
-    const profileRemove = event.target.closest('[data-profile-index]');
-    if (profileRemove) {
-      state.loves.splice(Number(profileRemove.dataset.profileIndex), 1);
-      saveProfile();
-      renderTasteProfile();
-    }
-  });
+      const recent = event.target.closest('.recent-open');
+      if (recent) {
+        const item = state.recent.find((entry) => entry.id === recent.dataset.recentId);
+        if (item?.data) {
+          saveLastResult(item.data);
+          window.location.href = `/results?intent=${encodeURIComponent(item.intent)}`;
+        }
+        return;
+      }
 
-  $('#feedback').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      const value = $('#feedback').value.trim();
-      if (value) { $('#feedback').value = ''; runConcierge(value); }
-    }
-  });
-  $('#refineButton').addEventListener('click', () => {
-    const value = $('#feedback').value.trim();
-    if (value) { $('#feedback').value = ''; runConcierge(value); }
-  });
-  $('#newRequest').addEventListener('click', () => setView('home'));
+      const savedThumb = event.target.closest('.saved-thumb');
+      if (savedThumb) {
+        const work = state.saved.find((item) => item.id === savedThumb.dataset.savedId);
+        if (work) {
+          const data = { intent: 'find', summary: 'Saved from an earlier conversation with your concierge.', results: [work], not_for_sale: work.availability === 'available' ? [] : [work], purchase_available: work.availability === 'available' ? 1 : 0, total_found: 1, taste: { inputs: state.profile.loves } };
+          saveLastResult(data);
+          window.location.href = '/results?intent=find';
+        }
+      }
 
-  // Navigation
-  $$('[data-go]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.go)));
-  $$('[data-nav="home"]').forEach((link) => link.addEventListener('click', (event) => { event.preventDefault(); setView('home'); }));
-  $('#savedNav').addEventListener('click', () => setView('saved'));
-  $('#tasteNav').addEventListener('click', () => setView('mytaste'));
-  $('#editTaste').addEventListener('click', () => { setIntent('taste'); $('#goal').value = state.goal; renderChips(); });
-  $('#useSavedTaste').addEventListener('click', () => { renderChips(); $('#goal').value = state.goal; });
-
-  // Theme and text controls
-  $('#themeToggle').addEventListener('click', () => {
-    const current = document.documentElement.dataset.theme || 'light';
-    const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    document.documentElement.style.colorScheme = next;
-    localStorage.setItem('artConciergeTheme', next);
-  });
-  $('#fontScale').value = savedFontScale;
-  $('#fontScale').addEventListener('change', (event) => {
-    const scales = { sm: 0.92, md: 1, lg: 1.12 };
-    document.documentElement.style.setProperty('--scale', scales[event.target.value]);
-    localStorage.setItem('artConciergeFontScale', event.target.value);
-  });
-
-  function storeResultState(data) {
-    state.lastResults = data.results || [];
-    state.lastNotForSale = data.not_for_sale || [];
-    state.lastResultsSummary = data.summary || '';
-    state.lastPurchaseAvailable = data.purchase_available || 0;
-    state.lastTotalFound = data.total_found || 0;
-    state.lastTaste = data.taste || {};
+      const remove = event.target.closest('[data-remove-index]');
+      if (remove) {
+        state.profile.loves.splice(Number(remove.dataset.removeIndex), 1);
+        saveProfile();
+        renderTastePage();
+      }
+    });
   }
 
-  renderChips();
-  renderHomePanels();
+  function initHome() { renderHome(); }
+
+  function initConcierge() {
+    setIntent(state.intent);
+    renderTasteInConcierge();
+    const form = $('#requestForm');
+    const input = $('#requestInput');
+    form?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      beginRequest(input.value);
+    });
+    input?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        beginRequest(input.value);
+      }
+    });
+    $$('#intentList button').forEach((button) => button.addEventListener('click', () => {
+      const url = new URL('/concierge', window.location.origin);
+      url.searchParams.set('intent', button.dataset.intent);
+      window.location.href = url.toString();
+    }));
+  }
+
+  function initResults() {
+    if (state.last) renderResults(state.last);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('run') === '1') runPendingRequest();
+    $('#refineButton')?.addEventListener('click', () => {
+      const feedback = $('#feedback')?.value.trim();
+      if (!feedback || !state.last) return;
+      const base = { ...(state.last.request || buildRequest(state.last.summary || '', null, state.last.intent || 'discover')), feedback };
+      sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(base));
+      window.location.href = `/results?intent=${encodeURIComponent(base.intent)}&run=1`;
+    });
+    $('#feedback')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        $('#refineButton')?.click();
+      }
+    });
+  }
+
+  function initSaved() { renderSavedPage(); }
+
+  function initTaste() {
+    renderTastePage();
+    $('#tasteInput')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ',') {
+        event.preventDefault();
+        addProfileReference(event.target.value);
+        event.target.value = '';
+        renderTastePage();
+      }
+    });
+    $('#tasteInput')?.addEventListener('blur', (event) => {
+      if (event.target.value.trim()) {
+        addProfileReference(event.target.value);
+        event.target.value = '';
+        renderTastePage();
+      }
+    });
+    $('#tasteNotes')?.addEventListener('input', (event) => {
+      state.profile.notes = event.target.value;
+      saveProfile();
+    });
+    $('#saveTaste')?.addEventListener('click', () => {
+      saveProfile();
+      const button = $('#saveTaste');
+      button.textContent = 'Saved';
+      window.setTimeout(() => { button.textContent = 'Save my taste'; }, 1400);
+    });
+  }
+
+  applyThemeControls();
+  setupGlobalControls();
+  setActiveNav();
+  handleGlobalClicks();
+
+  switch (window.ART_CONCIERGE_PAGE) {
+    case 'home': initHome(); break;
+    case 'concierge': initConcierge(); break;
+    case 'results': initResults(); break;
+    case 'saved': initSaved(); break;
+    case 'taste': initTaste(); break;
+    default: break;
+  }
 })();

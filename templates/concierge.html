@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Ask Your Concierge · Art Concierge{% endblock %}
+{% block content %}
+<section class="workspace-page shell concierge-page">
+  <div class="workspace-header">
+    <div>
+      <h1 id="conciergeTitle">What are you looking for?</h1>
+      <p class="lede" id="conciergeLede">Start naturally. Give me as much or as little as you know.</p>
+    </div>
+    <a class="secondary-button header-action" href="/">Return home</a>
+  </div>
+
+  <div class="concierge-layout">
+    <section class="conversation-panel" aria-labelledby="conversationHeading">
+      <h2 id="conversationHeading" class="sr-only">Concierge conversation</h2>
+      <div id="conversationIntro" class="conversation-intro">
+        <p class="concierge-prompt">What should I help you with?</p>
+        <p class="conversation-hint">You can mention artists, music, films, fashion, places, the space the art is for, your budget, or simply how you want it to feel.</p>
+      </div>
+      <div id="conversationHistory" class="conversation-history"></div>
+      <form id="requestForm" class="request-composer">
+        <label for="requestInput">Your request</label>
+        <textarea id="requestInput" rows="5" placeholder="Find me something for my living room that feels calm but not predictable."></textarea>
+        <div class="composer-footer">
+          <span id="requestHint">Press Enter with ⌘/Ctrl to send.</span>
+          <button class="primary-button" type="submit">Ask my concierge <span aria-hidden="true">→</span></button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="context-panel" aria-label="Request context">
+      <div class="context-block">
+        <h2>Start anywhere</h2>
+        <div class="intent-list" id="intentList">
+          <button type="button" data-intent="discover">Discover</button>
+          <button type="button" data-intent="find">Find</button>
+          <button type="button" data-intent="taste">Develop my taste</button>
+          <button type="button" data-intent="curate">Curate</button>
+          <button type="button" data-intent="buy">Buy</button>
+          <button type="button" data-intent="keep_discovering">Keep discovering</button>
+        </div>
+      </div>
+      <div class="context-block" id="savedTasteBlock">
+        <div class="context-heading">
+          <h2>What you already like</h2>
+          <a href="/taste">Edit</a>
+        </div>
+        <div id="savedTaste" class="chips"></div>
+        <p id="savedTasteEmpty" class="context-empty">Your taste profile will build as you use the concierge.</p>
+      </div>
+    </aside>
+  </div>
+</section>
+{% endblock %}

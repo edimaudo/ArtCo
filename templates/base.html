@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Art Concierge helps you discover, choose and acquire art that fits your taste.">
+  <title>{% block title %}Art Concierge{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app-root">
+  <header class="topbar" role="banner">
+    <a class="brand" href="/" aria-label="Art Concierge home">ART CONCIERGE</a>
+    <nav class="primary-nav" aria-label="Primary navigation">
+      <a href="/concierge" data-page="concierge">Concierge</a>
+      <a href="/taste" data-page="taste">My Taste</a>
+      <a href="/saved" data-page="saved">Saved</a>
+    </nav>
+    <div class="topbar-actions">
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Switch to dark mode">◐</button>
+      <label class="font-control" for="fontScale">
+        <span class="sr-only">Text size</span>
+        <select id="fontScale" aria-label="Text size">
+          <option value="sm">Small</option>
+          <option value="md" selected>Medium</option>
+          <option value="lg">Large</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <main id="mainContent">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script>
+  window.ART_CONCIERGE_PAGE = "{{ page }}";
+</script>
+<script src="/static/js/app.js"></script>
+{% block page_script %}{% endblock %}
+</body>
+</html>

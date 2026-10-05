@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Results · Art Concierge{% endblock %}
+{% block content %}
+<section class="workspace-page shell results-page">
+  <div class="workspace-header results-heading">
+    <div>
+      <h1 id="resultsHeading">Works worth a closer look.</h1>
+      <p class="lede" id="resultsSummary"></p>
+      <p class="results-meta" id="resultsMeta"></p>
+    </div>
+    <div class="header-actions-group">
+      <a class="secondary-button" href="/concierge">Refine search</a>
+      <a class="primary-button" href="/concierge">Ask again</a>
+    </div>
+  </div>
+
+  <div id="tasteSummary" class="taste-summary" hidden>
+    <div>
+      <h2>What guided the search</h2>
+      <p id="tasteSummaryCopy"></p>
+    </div>
+    <div id="tasteTags" class="taste-tags"></div>
+  </div>
+
+  <section class="result-section" aria-labelledby="resultWorksHeading">
+    <div class="section-heading inline-heading">
+      <div>
+        <h2 id="resultWorksHeading">Recommendations</h2>
+        <p>Chosen against the brief you gave me.</p>
+      </div>
+    </div>
+    <div id="artGrid" class="art-grid"></div>
+  </section>
+
+  <section id="notForSaleSection" class="result-section not-for-sale" hidden aria-labelledby="notForSaleHeading">
+    <div class="section-heading">
+      <h2 id="notForSaleHeading">Not for sale</h2>
+      <p id="notForSaleHint"></p>
+    </div>
+    <div id="notForSaleGrid" class="art-grid"></div>
+  </section>
+
+  <section class="refine-panel" aria-labelledby="refineHeading">
+    <div>
+      <h2 id="refineHeading">Tell me what to change</h2>
+      <p>Ask for more like something you saw, or move the search in a different direction.</p>
+    </div>
+    <div class="refine-row">
+      <input id="feedback" type="text" placeholder="More photography, less abstract, lower price…" aria-label="Refine your search">
+      <button class="primary-button" id="refineButton" type="button">Refine</button>
+    </div>
+  </section>
+</section>
+{% endblock %}
