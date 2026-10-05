@@ -73,11 +73,14 @@ class ArtInstituteProvider:
 
 class MetProvider:
     name = "The Metropolitan Museum of Art"
-    base_url = "https://collectionapi.metmuseum.org/public/collection/v1"
+    base_url = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 
     async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            response = await client.get(f"{self.base_url}/search", params={"q": query, "hasImages": "true"})
+            response = await client.get(
+                f"{self.base_url}/search",
+                params={"q": query, "hasImages": "true", "limit": min(limit, 50), "offset": 0},
+            )
             response.raise_for_status()
             ids = (response.json().get("objectIDs") or [])[: min(limit, 18)]
             details = await asyncio.gather(

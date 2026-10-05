@@ -28,6 +28,7 @@ class ConciergeRequest(BaseModel):
     discovery_level: int = Field(default=50, ge=0, le=100)
     purchase_required: bool = False
     goal: str | None = Field(default=None, max_length=500)
+    number_of_works: int = Field(default=1, ge=1, le=8)
     feedback: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")

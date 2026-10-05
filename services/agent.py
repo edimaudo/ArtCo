@@ -65,6 +65,9 @@ def _deterministic_directions(request: ConciergeRequest, qloo_artists: list[dict
     else:
         directions.extend(["contemporary art", "modern painting", "contemporary photography"])
 
+    if request.preferred_market:
+        directions.append(f"art from {request.preferred_market}")
+
     if request.feedback:
         directions.append(request.feedback)
 
@@ -95,7 +98,7 @@ async def _build_search_plan(
     except Exception:
         llm_directions = []
 
-    directions = list(dict.fromkeys(llm_directions + _deterministic_directions(request, qloo_artists)))[:10]
+    directions = list(dict.fromkeys(llm_directions + _deterministic_directions(request, qloo_artists)))[:6]
     status[-1]["state"] = "done"
     return directions
 
@@ -164,18 +167,17 @@ async def _research(
     provider_groups = [commercial, institutional] if request.purchase_required else [institutional, commercial]
     works: list[Artwork] = []
 
+    # Bound the first pass so a slow/unavailable provider cannot dominate the request.
+    search_directions = directions[:4]
     for providers in provider_groups:
         tasks = [
-            _search_provider(provider, direction, limit=6)
+            _search_provider(provider, direction, limit=5)
             for provider in providers
-            for direction in directions[:5]
+            for direction in search_directions
         ]
         if tasks:
             batches = await asyncio.gather(*tasks)
             works.extend(item for batch in batches for item in batch)
-        # For purchasing, only move to institutional discovery after the commercial pass.
-        if request.purchase_required and providers is commercial and any(w.availability == "available" for w in works):
-            pass
 
     deduped: dict[str, Artwork] = {}
     for work in works:
@@ -203,7 +205,7 @@ def _select(works: list[Artwork], request: ConciergeRequest, qloo_artists: list[
         selected.append(work)
         if artist_key:
             seen_artists.add(artist_key)
-        if len(selected) >= 8:
+        if len(selected) >= max(1, request.number_of_works + 4):
             break
     return selected
 
@@ -235,7 +237,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     if _should_broaden(works, request):
         status.append({"label": "Expanding the search", "state": "active"})
         broader = list(dict.fromkeys(directions + ["emerging contemporary artists", "adjacent contemporary art"]))
-        second_pass = await _research(broader[-5:], request, status)
+        second_pass = await _research(broader[-4:], request, status)
         works.extend(second_pass)
         status[-1]["state"] = "done"
 
@@ -246,25 +248,35 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     selected = _select(works, request, qloo_artists)
     status[-1]["state"] = "done"
 
-    purchasable = [work for work in selected if work.availability == "available"]
-    not_for_sale = [work for work in selected if work.availability != "available"]
+    purchasable = [work for work in selected if work.availability == "available" and work.source_kind == "commercial"]
+    not_for_sale = [work for work in selected if work.availability != "available" or work.source_kind != "commercial"]
 
-    # For Buy, purchased inventory is the primary result. Institutional results are
-    # deliberately retained as a secondary discovery section.
+    # Buy means purchase inventory first. Never relabel an institutional work as purchasable.
     if request.purchase_required:
-        primary = purchasable[:6]
+        primary = purchasable[:request.number_of_works]
         secondary = not_for_sale[:4]
-        if not primary:
-            primary = selected[:6]
     else:
-        primary = selected[:8]
+        primary = selected[:request.number_of_works] if request.intent.value == "curate" else selected[:8]
         secondary = not_for_sale[:4]
 
     status.append({"label": "Preparing your shortlist", "state": "done"})
 
+    intent_summary = {
+        "discover": "I used your broader cultural references to explore artistic territory beyond the obvious.",
+        "find": "I translated your brief into search directions and narrowed the results to works that fit the criteria you gave me.",
+        "taste": "I started with your cultural references and used them to open up useful places to explore.",
+        "curate": "I looked for works that fit your taste and can make sense together in the context you described.",
+        "buy": "I prioritised artwork marked as available from commercial sources. Institutional works are kept separate as cultural references.",
+        "keep_discovering": "I used your current taste as the starting point and introduced adjacent directions so the next discoveries can build on this search.",
+    }[request.intent.value]
+
+    commercial_found = sum(work.source_kind == "commercial" for work in works)
+    institutional_found = sum(work.source_kind == "institution" for work in works)
+
     return {
         "success": True,
         "intent": request.intent.value,
+        "summary": intent_summary,
         "taste": {
             "inputs": request.loves + request.additional_interests,
             "resolved": resolved[:10],
@@ -273,7 +285,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "search_directions": directions,
         "results": [_serialize(work, request, qloo_artists) for work in primary],
         "not_for_sale": [_serialize(work, request, qloo_artists) for work in secondary],
-        "purchase_available": sum(work.availability == "available" for work in works),
+        "purchase_available": len(purchasable),
+        "commercial_found": commercial_found,
+        "institutional_found": institutional_found,
         "total_found": len(works),
         "status": status,
     }
@@ -282,8 +296,16 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 def _serialize(work: Artwork, request: ConciergeRequest, qloo_artists: list[dict[str, Any]]) -> dict[str, Any]:
     reasons: list[str] = []
     artist_names = {str(item.get("name")).lower() for item in qloo_artists if item.get("name")}
-    if work.artist.lower() in artist_names or any(name in work.artist.lower() for name in artist_names):
-        reasons.append("connected to your Qloo taste profile")
+    matching_artist = next(
+        (item for item in qloo_artists if item.get("name") and str(item.get("name")).lower() in work.artist.lower()),
+        None,
+    )
+    if matching_artist:
+        affinity = matching_artist.get("affinity")
+        if isinstance(affinity, (int, float)):
+            reasons.append("This artist has a strong connection to your cultural references")
+        else:
+            reasons.append("This artist has a strong connection to your cultural references")
     if request.art_interests and work.medium and any(item.lower() in work.medium.lower() for item in request.art_interests):
         reasons.append("matches your stated art interests")
     if request.mediums and work.medium and any(item.lower() in work.medium.lower() for item in request.mediums):
@@ -312,4 +334,10 @@ def _serialize(work: Artwork, request: ConciergeRequest, qloo_artists: list[dict
         "description": work.description,
         "matched_direction": work.matched_direction,
         "why": reasons[:2],
+        "price_label": (
+            f"{work.currency} {work.price:,.0f}" if work.price is not None and work.currency else
+            f"{work.price:,.0f}" if work.price is not None else
+            "Price on request" if work.source_kind == "commercial" and work.availability == "available" else
+            None
+        ),
     }
