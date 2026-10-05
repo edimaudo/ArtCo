@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Art Concierge — a personal cultural discovery and art research assistant.">
+  <title>Art Concierge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app-root" id="appRoot">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Art Concierge home">ART CONCIERGE</a>
+    <div class="topbar-actions">
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Toggle dark mode">◐</button>
+      <label class="font-control" for="fontScale">Text
+        <select id="fontScale" aria-label="Text size">
+          <option value="sm">Small</option>
+          <option value="md" selected>Medium</option>
+          <option value="lg">Large</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero shell">
+      <div class="hero-copy">
+        <p class="eyebrow">YOUR PERSONAL ART CONCIERGE</p>
+        <h1>Tell me what speaks to you.</h1>
+        <p class="lede">Your concierge connects your broader cultural taste to the art world, then does the research for you.</p>
+        <div class="hero-rule"></div>
+      </div>
+      <div class="hero-note">
+        <span class="number">01</span>
+        <span>Choose what you want help with.</span>
+      </div>
+    </section>
+
+    <section class="shell concierge-entry" aria-labelledby="help-heading">
+      <div class="section-heading">
+        <p class="eyebrow">WHAT CAN I HELP WITH?</p>
+        <h2 id="help-heading">Start with your intent.</h2>
+      </div>
+      <div class="intent-grid" id="intentGrid">
+        <button class="intent-card selected" data-intent="discover"><span>Discover</span><small>Show me something unexpected.</small></button>
+        <button class="intent-card" data-intent="find"><span>Find</span><small>I have something specific in mind.</small></button>
+        <button class="intent-card" data-intent="taste"><span>Develop my taste</span><small>Help me figure out what I respond to.</small></button>
+        <button class="intent-card" data-intent="curate"><span>Curate</span><small>Help me bring several works together.</small></button>
+        <button class="intent-card" data-intent="buy"><span>Buy</span><small>Find art I can actually acquire.</small></button>
+        <button class="intent-card" data-intent="keep_discovering"><span>Keep discovering</span><small>Keep building on my taste over time.</small></button>
+      </div>
+    </section>
+
+    <section class="shell brief-panel" aria-labelledby="brief-heading">
+      <div class="section-heading compact">
+        <p class="eyebrow">YOUR BRIEF</p>
+        <h2 id="brief-heading">Give the concierge enough to work with.</h2>
+      </div>
+
+      <div class="form-grid">
+        <fieldset class="field-group wide">
+          <legend>What already speaks to you?</legend>
+          <p class="hint">Artists, films, music, brands, places, books — anything. Add as many as you like.</p>
+          <div class="chip-input-wrap">
+            <div id="loveChips" class="chips" aria-live="polite"></div>
+            <input id="loveInput" type="text" placeholder="e.g. Radiohead, Issey Miyake, Tokyo" aria-label="Cultural interests">
+          </div>
+        </fieldset>
+
+        <fieldset class="field-group wide">
+          <legend>Anything else the concierge should know?</legend>
+          <textarea id="goal" rows="3" placeholder="e.g. I want something calm for a large living-room wall, but I don't want it to feel generic." aria-label="Additional art brief"></textarea>
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>What kind of art interests you?</legend>
+          <div class="check-grid">
+            <label><input type="checkbox" name="art" value="contemporary"> Contemporary</label>
+            <label><input type="checkbox" name="art" value="modern"> Modern</label>
+            <label><input type="checkbox" name="art" value="photography"> Photography</label>
+            <label><input type="checkbox" name="art" value="painting"> Painting</label>
+            <label><input type="checkbox" name="art" value="sculpture"> Sculpture</label>
+            <label><input type="checkbox" name="art" value="abstract"> Abstract</label>
+          </div>
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>How adventurous?</legend>
+          <div class="range-labels"><span>Familiar</span><span>Balanced</span><span>Unexpected</span></div>
+          <input id="discovery" type="range" min="0" max="100" value="50" aria-label="Discovery level">
+          <div class="range-value" id="discoveryValue">Balanced</div>
+        </fieldset>
+
+        <fieldset class="field-group conditional" id="purchaseFields">
+          <legend>Budget</legend>
+          <div class="budget-row">
+            <input id="budgetMin" type="number" min="0" step="100" placeholder="Min" inputmode="decimal">
+            <span>to</span>
+            <input id="budgetMax" type="number" min="0" step="100" placeholder="Max" inputmode="decimal">
+          </div>
+          <p class="hint">For Buy, the concierge prioritizes inventory marked available to acquire.</p>
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>Where is it going?</legend>
+          <select id="room" aria-label="Destination for artwork">
+            <option value="">Not sure yet</option>
+            <option>Living room</option><option>Bedroom</option><option>Office</option><option>Collection</option><option>Gift</option>
+          </select>
+        </fieldset>
+
+        <fieldset class="field-group conditional" id="marketFields">
+          <legend>Where should the concierge look?</legend>
+          <input id="preferredMarket" type="text" placeholder="e.g. Canada, Toronto, New York, online" aria-label="Preferred artwork market">
+        </fieldset>
+
+        <fieldset class="field-group conditional" id="mediumFields">
+          <legend>Preferred medium</legend>
+          <div class="check-grid"><label><input type="checkbox" name="medium" value="painting"> Painting</label><label><input type="checkbox" name="medium" value="photography"> Photography</label><label><input type="checkbox" name="medium" value="print"> Print</label><label><input type="checkbox" name="medium" value="sculpture"> Sculpture</label></div>
+        </fieldset>
+      </div>
+
+      <div class="brief-actions">
+        <button class="primary-button" id="runConcierge" type="button">Ask my concierge <span aria-hidden="true">→</span></button>
+        <p class="small-note">The concierge uses your answers to decide what to explore, then researches artwork sources.</p>
+      </div>
+    </section>
+
+    <section class="shell research" id="research" hidden aria-labelledby="research-heading">
+      <div class="research-header">
+        <div>
+          <p class="eyebrow">CONCIERGE RESEARCH</p>
+          <h2 id="research-heading">Working through your brief.</h2>
+        </div>
+        <div class="research-count" id="researchCount"></div>
+      </div>
+      <div class="status-list" id="statusList"></div>
+      <div class="search-directions" id="searchDirections"></div>
+    </section>
+
+    <section class="shell results" id="results" hidden aria-labelledby="results-heading">
+      <div class="results-header">
+        <div>
+          <p class="eyebrow">YOUR SHORTLIST</p>
+          <h2 id="results-heading">Works worth a closer look.</h2>
+        </div>
+        <div class="results-meta" id="resultsMeta"></div>
+      </div>
+
+      <div class="taste-summary" id="tasteSummary" hidden>
+        <div>
+          <p class="eyebrow">WHAT I UNDERSTOOD</p>
+          <p class="taste-summary-copy" id="tasteSummaryCopy"></p>
+        </div>
+        <div class="taste-tags" id="tasteTags"></div>
+      </div>
+
+      <div class="art-grid" id="artGrid"></div>
+
+      <div class="secondary-results" id="notForSaleSection" hidden>
+        <div class="section-heading compact">
+          <p class="eyebrow">NOT FOR SALE</p>
+          <h3>Still worth knowing about.</h3>
+          <p class="hint">These works came from institutional collections. They are presented as cultural references, not purchase inventory.</p>
+        </div>
+        <div class="art-grid secondary" id="notForSaleGrid"></div>
+      </div>
+
+      <div class="feedback-bar">
+        <label for="feedback">Refine the search</label>
+        <div class="feedback-row"><input id="feedback" type="text" placeholder="e.g. Less abstract, more Japanese, cheaper, more unexpected…"><button class="secondary-button" id="refineButton" type="button">Search again</button></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell footer"><span>ART CONCIERGE</span><span>Qloo × cultural discovery × artwork research</span></footer>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
