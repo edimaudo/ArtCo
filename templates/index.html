@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A personal art concierge that helps you discover, choose and acquire art.">
+  <meta name="description" content="Art Concierge helps you discover, choose and acquire art that fits your taste.">
   <title>Art Concierge</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,11 +12,11 @@
 </head>
 <body>
 <div class="app-root" id="appRoot">
-  <header class="topbar shell">
-    <a class="brand" href="/" aria-label="Art Concierge home">ART CONCIERGE</a>
+  <header class="topbar">
+    <a class="brand" href="#home" data-nav="home" aria-label="Art Concierge home">ART CONCIERGE</a>
     <div class="topbar-actions">
-      <button class="utility-button" id="themeToggle" type="button" aria-label="Switch colour theme">Dark</button>
-      <label class="text-control" for="fontScale">Text size
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Toggle dark mode">◐</button>
+      <label class="font-control" for="fontScale">Text
         <select id="fontScale" aria-label="Text size">
           <option value="sm">Small</option>
           <option value="md" selected>Medium</option>
@@ -26,201 +26,248 @@
     </div>
   </header>
 
-  <main class="shell workspace">
-    <section class="view active" data-view="intro" aria-labelledby="intro-title">
-      <div class="intro-layout">
-        <div class="intro-copy">
-          <h1 id="intro-title">Find art that feels like you.</h1>
-          <p>Your personal art concierge starts with what you already love, then does the searching for you.</p>
+  <main>
+    <section class="view active" data-view="home" id="homeView">
+      <div class="home shell">
+        <div class="home-hero">
+          <div>
+            <p class="welcome" id="welcomeText">Your personal art concierge.</p>
+            <h1>Tell me what you're looking for.</h1>
+            <p class="lede">I’ll use what you love, what you need and how far you want to explore to find art worth your attention.</p>
+          </div>
+          <div class="quick-request">
+            <label for="quickPrompt">Start with a request</label>
+            <textarea id="quickPrompt" rows="3" placeholder="Find me something for my living room that feels calm but not predictable."></textarea>
+            <div class="quick-actions">
+              <button class="primary-button" id="quickStart" type="button">Ask my concierge <span aria-hidden="true">→</span></button>
+            </div>
+          </div>
         </div>
-        <div class="intent-area">
-          <h2>What are you looking for?</h2>
+
+        <div class="home-section">
+          <div class="section-heading row-heading">
+            <h2>What are we working on?</h2>
+            <button class="text-link" id="tasteNav" type="button">My taste</button>
+          </div>
           <div class="intent-grid" id="intentGrid">
-            <button class="intent-card selected" data-intent="discover" type="button">
-              <strong>Discover</strong>
-              <span>Take me somewhere new.</span>
+            <button class="intent-card" data-intent="discover" type="button">
+              <span>Discover</span><small>Take me somewhere new.</small>
             </button>
             <button class="intent-card" data-intent="find" type="button">
-              <strong>Find</strong>
-              <span>I have something specific in mind.</span>
+              <span>Find</span><small>I have something specific in mind.</small>
             </button>
             <button class="intent-card" data-intent="taste" type="button">
-              <strong>Develop my taste</strong>
-              <span>Help me learn what I respond to.</span>
+              <span>Develop my taste</span><small>Help me work out what I respond to.</small>
             </button>
             <button class="intent-card" data-intent="curate" type="button">
-              <strong>Curate</strong>
-              <span>Bring several works together.</span>
+              <span>Curate</span><small>Bring several works together.</small>
             </button>
             <button class="intent-card" data-intent="buy" type="button">
-              <strong>Buy</strong>
-              <span>Find art I can actually acquire.</span>
+              <span>Buy</span><small>Find art I can actually acquire.</small>
             </button>
             <button class="intent-card" data-intent="keep_discovering" type="button">
-              <strong>Keep discovering</strong>
-              <span>Continue from what I already like.</span>
+              <span>Keep discovering</span><small>Continue from what I already like.</small>
             </button>
           </div>
-          <div class="view-actions">
-            <button class="primary-button" id="startBrief" type="button">Continue</button>
-          </div>
+        </div>
+
+        <div class="home-lower">
+          <section class="home-section compact-section" aria-labelledby="recent-heading">
+            <div class="section-heading row-heading">
+              <h2 id="recent-heading">Recent requests</h2>
+              <span class="section-note" id="recentNote"></span>
+            </div>
+            <div class="recent-list" id="recentList"></div>
+          </section>
+
+          <section class="home-section compact-section" aria-labelledby="saved-heading">
+            <div class="section-heading row-heading">
+              <h2 id="saved-heading">Saved art</h2>
+              <button class="text-link" id="savedNav" type="button">View all</button>
+            </div>
+            <div class="saved-preview" id="savedPreview"></div>
+          </section>
         </div>
       </div>
     </section>
 
-    <section class="view" data-view="taste" aria-labelledby="taste-title" hidden>
-      <div class="view-heading">
-        <h2 id="taste-title">Start with what already speaks to you.</h2>
-        <p>Artists, films, music, fashion, places, books or anything else you genuinely like.</p>
-      </div>
+    <section class="view" data-view="taste" hidden>
+      <div class="shell service-view">
+        <button class="back-link" data-go="home" type="button">← Home</button>
+        <div class="service-header">
+          <div>
+            <p class="service-context" id="tasteContext">Develop my taste</p>
+            <h2>Start with what already speaks to you.</h2>
+            <p class="service-lede">Artists, films, music, fashion, places, books or anything else you genuinely like.</p>
+          </div>
+          <button class="text-link" id="useSavedTaste" type="button">Use my saved taste</button>
+        </div>
 
-      <div class="taste-layout">
-        <div class="taste-main">
-          <label class="field-label" for="loveInput">Your references</label>
-          <div class="reference-input" id="referenceInput">
-            <div id="loveChips" class="reference-list" aria-live="polite"></div>
+        <div class="concierge-question" id="tasteQuestion">
+          <div class="question-label">Your references</div>
+          <div class="reference-input">
+            <div id="loveChips" class="chips" aria-live="polite"></div>
             <input id="loveInput" type="text" placeholder="Try Radiohead, Tokyo, Issey Miyake…" aria-label="Cultural references">
           </div>
-          <p class="field-note">Press Enter after each reference.</p>
+          <p class="question-note">Press Enter after each reference. You can skip this and tell me in your own words instead.</p>
+          <textarea id="goal" rows="4" placeholder="What are you hoping to find? What do you want to avoid? Anything else that matters to you."></textarea>
         </div>
 
-        <div class="taste-side">
-          <label class="field-label" for="discovery">How far should I explore?</label>
-          <div class="slider-labels"><span>Close to my taste</span><span id="discoveryValue">Balanced</span><span>Surprising</span></div>
-          <input id="discovery" type="range" min="0" max="100" value="50" aria-label="Discovery level">
+        <div class="service-footer">
+          <button class="secondary-button" data-go="home" type="button">Cancel</button>
+          <button class="primary-button" id="tasteContinue" type="button">Continue <span aria-hidden="true">→</span></button>
         </div>
-      </div>
-
-      <div class="view-actions split">
-        <button class="secondary-button" data-back="intro" type="button">Back</button>
-        <button class="primary-button" data-next="details" type="button">Continue</button>
       </div>
     </section>
 
-    <section class="view" data-view="details" aria-labelledby="details-title" hidden>
-      <div class="view-heading">
-        <h2 id="details-title">Give me the context.</h2>
-        <p id="detailsIntro">A few details help me narrow the search without making you fill out a long form.</p>
-      </div>
-
-      <div class="details-grid">
-        <div class="field-block wide">
-          <label class="field-label" for="goal">What should I know?</label>
-          <textarea id="goal" rows="3" placeholder="Tell me what you're hoping to find, what you want to avoid, or anything else that matters."></textarea>
-        </div>
-
-        <div class="field-block" id="artInterestField">
-          <label class="field-label">Art you're drawn to</label>
-          <div class="choice-grid compact">
-            <label><input type="checkbox" name="art" value="contemporary"> Contemporary</label>
-            <label><input type="checkbox" name="art" value="modern"> Modern</label>
-            <label><input type="checkbox" name="art" value="photography"> Photography</label>
-            <label><input type="checkbox" name="art" value="painting"> Painting</label>
-            <label><input type="checkbox" name="art" value="sculpture"> Sculpture</label>
-            <label><input type="checkbox" name="art" value="abstract"> Abstract</label>
+    <section class="view" data-view="preferences" hidden>
+      <div class="shell service-view">
+        <button class="back-link" data-go="taste" type="button">← Back</button>
+        <div class="service-header">
+          <div>
+            <p class="service-context" id="preferenceContext">Your request</p>
+            <h2 id="preferenceTitle">A little context will help.</h2>
+            <p class="service-lede" id="preferenceLede">I’ll keep the questions relevant to what you’re trying to do.</p>
           </div>
         </div>
+        <div class="preference-grid">
+          <div class="preference-block">
+            <label for="discovery">How far should I explore?</label>
+            <div class="range-labels"><span>Close to my taste</span><span id="discoveryValue">Balanced</span><span>Surprising</span></div>
+            <input id="discovery" type="range" min="0" max="100" value="50" aria-label="Discovery level">
+          </div>
 
-        <div class="field-block" id="roomField">
-          <label class="field-label" for="room">Where is it going?</label>
-          <select id="room">
-            <option value="">Not sure yet</option>
-            <option>Living room</option>
-            <option>Bedroom</option>
-            <option>Office</option>
-            <option>Collection</option>
-            <option>Gift</option>
-          </select>
+          <div class="preference-block" id="artInterestBlock">
+            <span>What are you drawn to?</span>
+            <div class="choice-grid">
+              <label><input type="checkbox" name="art" value="contemporary"> Contemporary</label>
+              <label><input type="checkbox" name="art" value="modern"> Modern</label>
+              <label><input type="checkbox" name="art" value="photography"> Photography</label>
+              <label><input type="checkbox" name="art" value="painting"> Painting</label>
+              <label><input type="checkbox" name="art" value="sculpture"> Sculpture</label>
+              <label><input type="checkbox" name="art" value="abstract"> Abstract</label>
+            </div>
+          </div>
+
+          <div class="preference-block" id="roomBlock">
+            <label for="room">Where is it going?</label>
+            <select id="room">
+              <option value="">Not sure yet</option>
+              <option>Living room</option><option>Bedroom</option><option>Office</option><option>Collection</option><option>Gift</option>
+            </select>
+          </div>
+
+          <div class="preference-block commercial-only" id="countBlock" hidden>
+            <label for="numberOfWorks">How many works?</label>
+            <select id="numberOfWorks">
+              <option value="1">1 work</option><option value="2">2 works</option><option value="3" selected>3 works</option><option value="4">4 works</option><option value="5">5 works</option><option value="6">6 works</option>
+            </select>
+          </div>
+
+          <div class="preference-block commercial-only" id="budgetBlock" hidden>
+            <label for="budgetMax">Maximum budget</label>
+            <div class="money-input"><span>$</span><input id="budgetMax" type="number" min="0" step="100" placeholder="5,000" inputmode="decimal"></div>
+          </div>
+
+          <div class="preference-block commercial-only" id="marketBlock" hidden>
+            <label for="preferredMarket">Where should I look?</label>
+            <input id="preferredMarket" type="text" placeholder="Canada, Toronto, New York, online…">
+          </div>
+
+          <div class="preference-block commercial-only" id="mediumBlock" hidden>
+            <span>Preferred medium</span>
+            <div class="choice-grid">
+              <label><input type="checkbox" name="medium" value="painting"> Painting</label>
+              <label><input type="checkbox" name="medium" value="photography"> Photography</label>
+              <label><input type="checkbox" name="medium" value="print"> Print</label>
+              <label><input type="checkbox" name="medium" value="sculpture"> Sculpture</label>
+            </div>
+          </div>
+        </div>
+        <div class="service-footer">
+          <button class="secondary-button" data-go="taste" type="button">Back</button>
+          <button class="primary-button" id="researchButton" type="button">Let me look <span aria-hidden="true">→</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="research" hidden>
+      <div class="shell research-view">
+        <div class="research-mark" aria-hidden="true"></div>
+        <p class="service-context">Your concierge</p>
+        <h2 id="researchHeading">I’m on it.</h2>
+        <p id="researchMessage">I’m looking through the art world for the strongest matches.</p>
+        <div class="research-detail" id="researchDetail"></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="results" hidden>
+      <div class="shell results-view">
+        <div class="results-header">
+          <div>
+            <button class="back-link" data-go="home" type="button">← Home</button>
+            <h2 id="resultsHeading">Your shortlist</h2>
+            <p class="results-summary" id="resultsSummary"></p>
+          </div>
+          <button class="secondary-button" id="newRequest" type="button">New request</button>
         </div>
 
-        <div class="field-block commercial-only" hidden>
-          <label class="field-label" for="numberOfWorks">How many works?</label>
-          <select id="numberOfWorks">
-            <option value="1">1 work</option>
-            <option value="2">2 works</option>
-            <option value="3" selected>3 works</option>
-            <option value="4">4 works</option>
-            <option value="5">5 works</option>
-            <option value="6">6 works</option>
-          </select>
+        <div class="taste-summary" id="tasteSummary" hidden>
+          <p class="taste-summary-copy" id="tasteSummaryCopy"></p>
+          <div class="taste-tags" id="tasteTags"></div>
         </div>
 
-        <div class="field-block commercial-only" hidden>
-          <label class="field-label" for="budgetMax">Maximum budget</label>
-          <div class="money-input"><span>$</span><input id="budgetMax" type="number" min="0" step="100" placeholder="5,000" inputmode="decimal"></div>
-        </div>
+        <div class="results-meta" id="resultsMeta"></div>
+        <div class="art-grid" id="artGrid"></div>
 
-        <div class="field-block commercial-only" hidden>
-          <label class="field-label" for="preferredMarket">Where should I look?</label>
-          <input id="preferredMarket" type="text" placeholder="Canada, Toronto, New York, online…">
-        </div>
+        <section class="not-for-sale" id="notForSaleSection" hidden aria-labelledby="not-for-sale-title">
+          <div class="section-heading compact">
+            <h3 id="not-for-sale-title">Not for sale</h3>
+            <p class="hint" id="notForSaleHint">These works are worth seeing even though they are not currently available to acquire.</p>
+          </div>
+          <div class="art-grid" id="notForSaleGrid"></div>
+        </section>
 
-        <div class="field-block commercial-only" hidden>
-          <label class="field-label">Preferred medium</label>
-          <div class="choice-grid compact">
-            <label><input type="checkbox" name="medium" value="painting"> Painting</label>
-            <label><input type="checkbox" name="medium" value="photography"> Photography</label>
-            <label><input type="checkbox" name="medium" value="print"> Print</label>
-            <label><input type="checkbox" name="medium" value="sculpture"> Sculpture</label>
+        <div class="feedback-bar">
+          <label for="feedback">Tell me what to change</label>
+          <div class="feedback-row">
+            <input id="feedback" type="text" placeholder="More unexpected, less abstract, cheaper, more photography…">
+            <button class="secondary-button" id="refineButton" type="button">Search again</button>
           </div>
         </div>
       </div>
-
-      <div class="view-actions split">
-        <button class="secondary-button" data-back="taste" type="button">Back</button>
-        <button class="primary-button" data-next="review" type="button">Review</button>
-      </div>
     </section>
 
-    <section class="view" data-view="review" aria-labelledby="review-title" hidden>
-      <div class="view-heading">
-        <h2 id="review-title">Here’s what I’ll work from.</h2>
-        <p>Change anything before I start searching.</p>
-      </div>
-      <div class="review-card" id="reviewCard"></div>
-      <div class="view-actions split">
-        <button class="secondary-button" data-back="details" type="button">Back</button>
-        <button class="primary-button" id="runConcierge" type="button">Start the search</button>
-      </div>
-    </section>
-
-    <section class="view" data-view="research" aria-labelledby="research-title" hidden>
-      <div class="research-view">
-        <h2 id="research-title">I’m on it.</h2>
-        <p id="researchMessage">I’m researching the best matches for your brief.</p>
-        <div class="research-activity" id="statusList" aria-live="polite"></div>
-      </div>
-    </section>
-
-    <section class="view" data-view="results" aria-labelledby="results-title" hidden>
-      <div class="results-heading">
-        <div>
-          <h2 id="results-title">Your shortlist</h2>
-          <p id="resultsSummary"></p>
+    <section class="view" data-view="saved" hidden>
+      <div class="shell saved-view">
+        <button class="back-link" data-go="home" type="button">← Home</button>
+        <div class="service-header">
+          <div>
+            <p class="service-context">Your saved art</p>
+            <h2>Keep the works you want to come back to.</h2>
+          </div>
         </div>
-        <button class="text-button" id="newSearch" type="button">Start over</button>
+        <div class="art-grid" id="savedGrid"></div>
       </div>
+    </section>
 
-      <div class="taste-context" id="tasteSummary" hidden>
-        <p id="tasteSummaryCopy"></p>
-        <div id="tasteTags" class="reference-list"></div>
-      </div>
-
-      <div class="art-grid" id="artGrid"></div>
-
-      <section class="not-for-sale" id="notForSaleSection" hidden aria-labelledby="not-for-sale-title">
-        <div class="subheading">
-          <h3 id="not-for-sale-title">Not for sale</h3>
-          <p id="notForSaleHint">These works are worth seeing even though they are not currently available to acquire.</p>
+    <section class="view" data-view="mytaste" hidden>
+      <div class="shell saved-view">
+        <button class="back-link" data-go="home" type="button">← Home</button>
+        <div class="service-header">
+          <div>
+            <p class="service-context">Your taste</p>
+            <h2>What your concierge knows about you.</h2>
+            <p class="service-lede">These references stay with you so future searches can build on what you already like.</p>
+          </div>
         </div>
-        <div class="art-grid" id="notForSaleGrid"></div>
-      </section>
-
-      <div class="refine-area">
-        <label class="field-label" for="feedback">Want me to adjust the search?</label>
-        <div class="refine-row">
-          <input id="feedback" type="text" placeholder="More unexpected, less abstract, cheaper, more photography…">
-          <button class="secondary-button" id="refineButton" type="button">Search again</button>
+        <div class="profile-panel">
+          <div id="tasteProfileChips" class="chips large"></div>
+          <p class="profile-empty" id="tasteProfileEmpty">You haven’t saved any cultural references yet.</p>
+        </div>
+        <div class="service-footer">
+          <button class="secondary-button" data-go="home" type="button">Back</button>
+          <button class="primary-button" id="editTaste" type="button">Update my taste</button>
         </div>
       </div>
     </section>

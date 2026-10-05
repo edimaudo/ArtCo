@@ -264,7 +264,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     intent_summary = {
         "discover": "I used your broader cultural references to explore artistic territory beyond the obvious.",
         "find": "I translated your brief into search directions and narrowed the results to works that fit the criteria you gave me.",
-        "taste": "I started with your cultural references and used them to open up useful places to explore.",
+        "taste": "I started close to the preferences you gave me, then explored related artists and directions that can help you discover what you respond to.",
         "curate": "I looked for works that fit your taste and can make sense together in the context you described.",
         "buy": "I prioritised artwork marked as available from commercial sources. Institutional works are kept separate as cultural references.",
         "keep_discovering": "I used your current taste as the starting point and introduced adjacent directions so the next discoveries can build on this search.",
@@ -295,7 +295,6 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 
 def _serialize(work: Artwork, request: ConciergeRequest, qloo_artists: list[dict[str, Any]]) -> dict[str, Any]:
     reasons: list[str] = []
-    artist_names = {str(item.get("name")).lower() for item in qloo_artists if item.get("name")}
     matching_artist = next(
         (item for item in qloo_artists if item.get("name") and str(item.get("name")).lower() in work.artist.lower()),
         None,
@@ -303,9 +302,9 @@ def _serialize(work: Artwork, request: ConciergeRequest, qloo_artists: list[dict
     if matching_artist:
         affinity = matching_artist.get("affinity")
         if isinstance(affinity, (int, float)):
-            reasons.append("This artist has a strong connection to your cultural references")
+            reasons.append("Connected to your wider cultural taste")
         else:
-            reasons.append("This artist has a strong connection to your cultural references")
+            reasons.append("Connected to your wider cultural taste")
     if request.art_interests and work.medium and any(item.lower() in work.medium.lower() for item in request.art_interests):
         reasons.append("matches your stated art interests")
     if request.mediums and work.medium and any(item.lower() in work.medium.lower() for item in request.mediums):

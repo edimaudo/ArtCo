@@ -15,7 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(
     title="Art Concierge",
-    description="A personal cultural discovery and artwork research concierge powered by Qloo.",
+    description="A personal art concierge for cultural discovery, artwork research and acquisition.",
     version="0.2.0",
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
