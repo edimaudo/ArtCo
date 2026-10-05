@@ -1,6 +1,6 @@
 # ArtCo
 
-An agentic art discovery & Concierge System built using Qloo & Gemini.
+An art discovery & Concierge.
 
 ## Product model
 
