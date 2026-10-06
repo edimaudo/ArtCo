@@ -472,3 +472,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .range-line input[type="range"] { width: 100%; accent-color: var(--accent); }
 .range-line span:last-child { min-width: 42px; text-align: right; color: var(--text); font-weight: 600; }
 .taste-save-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+.action-message { margin-top: 10px; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.buy-action:disabled { opacity: .65; cursor: wait; }
+.checkout-status { max-width: 720px; padding-top: 22px; }
+.checkout-status .lede { max-width: 650px; }
+.checkout-actions { display: flex; gap: 10px; margin-top: 30px; flex-wrap: wrap; }

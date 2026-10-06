@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from models.schemas import ConciergeRequest
 from services.concierge import run
+from services.payments import PaymentUnavailable, PaymentConfigurationError, create_checkout_session, parse_webhook, verify_webhook_signature
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -50,6 +51,51 @@ async def saved_page(request: Request) -> HTMLResponse:
 @app.get("/taste", response_class=HTMLResponse)
 async def taste_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="taste.html", context={"page": "taste"})
+
+
+@app.get("/checkout/success", response_class=HTMLResponse)
+async def checkout_success(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="checkout_status.html", context={"page": "checkout", "status": "success"})
+
+
+@app.get("/checkout/cancel", response_class=HTMLResponse)
+async def checkout_cancel(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="checkout_status.html", context={"page": "checkout", "status": "cancel"})
+
+
+@app.post("/api/checkout/session")
+async def create_checkout(payload: dict[str, Any]) -> JSONResponse:
+    artwork_id = str(payload.get("artwork_id") or "").strip()
+    if not artwork_id:
+        return JSONResponse({"success": False, "detail": "Artwork ID is required."}, status_code=400)
+    try:
+        session = await create_checkout_session(artwork_id)
+    except PaymentUnavailable as exc:
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=409)
+    except PaymentConfigurationError as exc:
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=422)
+    except Exception:
+        return JSONResponse({"success": False, "detail": "Stripe Checkout could not be started."}, status_code=502)
+    return JSONResponse({"success": True, "checkout_url": session.get("url"), "session_id": session.get("id")})
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request) -> JSONResponse:
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    if not verify_webhook_signature(payload, signature):
+        return JSONResponse({"success": False, "detail": "Invalid Stripe webhook signature."}, status_code=400)
+    event = parse_webhook(payload)
+    event_type = event.get("type", "")
+    # Keep webhook handling intentionally small until durable order storage is introduced.
+    if event_type == "checkout.session.completed":
+        session = (event.get("data") or {}).get("object") or {}
+        request.app.state.last_completed_checkout = {
+            "session_id": session.get("id"),
+            "artwork_id": (session.get("metadata") or {}).get("artwork_id"),
+            "completed_at": session.get("created"),
+        }
+    return JSONResponse({"success": True, "received": True})
 
 
 @app.get("/health")

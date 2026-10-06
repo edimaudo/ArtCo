@@ -351,10 +351,14 @@
     const image = work.image_url
       ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
       : '<div class="art-placeholder">Image unavailable</div>';
-    const linkLabel = available ? 'View artwork' : 'See at source';
-    const link = work.detail_url
+    const linkLabel = available ? 'Buy / enquire' : 'See at source';
+    const externalLink = work.detail_url
       ? `<a class="card-action" href="${escapeAttribute(work.detail_url)}" target="_blank" rel="noopener noreferrer">${linkLabel} →</a>`
       : '';
+    const checkoutButton = available && work.checkout_available
+      ? `<button class="card-action buy-action" type="button" data-id="${id}">Buy securely</button>`
+      : '';
+    const link = available && work.checkout_available ? `${checkoutButton}${externalLink}` : externalLink;
     const saved = state.saved.some((item) => item.id === work.id);
     const reasons = (work.why || []).map((item) => String(item)).join(' · ');
     const id = escapeAttribute(work.id);
@@ -458,10 +462,43 @@
     if (updated) updated.textContent = state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved';
   }
 
+  async function startCheckout(id, button) {
+    const message = $('#purchaseMessage');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Opening checkout…';
+    }
+    if (message) message.textContent = 'Opening secure checkout…';
+    try {
+      const response = await fetch('/api/checkout/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artwork_id: id }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.checkout_url) {
+        throw new Error(data.detail || 'Checkout is not available for this work.');
+      }
+      window.location.assign(data.checkout_url);
+    } catch (error) {
+      if (message) message.textContent = error.message || 'Checkout could not be started.';
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Buy securely';
+      }
+    }
+  }
+
   function handleGlobalClicks() {
     document.addEventListener('click', (event) => {
       const save = event.target.closest('.save-action');
       if (save) { toggleSave(save.dataset.id); return; }
+
+      const buy = event.target.closest('.buy-action');
+      if (buy) {
+        startCheckout(buy.dataset.id, buy);
+        return;
+      }
 
       const feedback = event.target.closest('.feedback-action');
       if (feedback) {

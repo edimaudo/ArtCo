@@ -8,6 +8,7 @@ from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers
 from .llm import CandidateReview, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
+from .payments import checkout_catalog_entry
 
 
 async def _resolve_entities(
@@ -226,6 +227,9 @@ def _candidate_payload(work: Artwork) -> dict[str, Any]:
         "source_kind": work.source_kind,
         "description": work.description,
         "matched_direction": work.matched_direction,
+        "purchase_mode": work.purchase_mode,
+        "seller_name": work.seller_name,
+        "checkout_available": bool(checkout_catalog_entry(work.id)),
     }
 
 
@@ -446,6 +450,9 @@ def _serialize(
         "source": work.source,
         "source_kind": work.source_kind,
         "availability": work.availability,
+        "purchase_mode": work.purchase_mode,
+        "seller_name": work.seller_name,
+        "checkout_available": bool(checkout_catalog_entry(work.id)),
         "price": work.price,
         "currency": work.currency,
         "medium": work.medium,

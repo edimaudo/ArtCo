@@ -34,6 +34,8 @@ class Artwork:
     year: str | None
     description: str | None
     matched_direction: str | None = None
+    purchase_mode: str = "external"
+    seller_name: str | None = None
 
 
 class ArtworkProvider(Protocol):
@@ -279,6 +281,8 @@ class Collect24Provider:
             dimensions=" · ".join(dimension_parts) if dimension_parts else None,
             year=item.get("year_created"),
             description=item.get("provenance_summary"),
+            purchase_mode="external",
+            seller_name=(item.get("seller") or {}).get("name") if isinstance(item.get("seller"), dict) else None,
         )
 
 
@@ -313,6 +317,8 @@ def _map_artsy(item: dict[str, Any]) -> Artwork:
         dimensions=(item.get("dimensions") or {}).get("cm", {}).get("text") if isinstance(item.get("dimensions"), dict) else item.get("dimensions"),
         year=str(item.get("date")) if item.get("date") else None,
         description=item.get("blurb"),
+        purchase_mode="external",
+        seller_name=None,
     )
 
 
@@ -368,6 +374,8 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
                 dimensions=row.get("dimensions"),
                 year=str(row.get("year")) if row.get("year") else None,
                 description=None,
+                purchase_mode="external",
+                seller_name=row.get("gallery") or row.get("gallery_name"),
             )
         )
     return output
