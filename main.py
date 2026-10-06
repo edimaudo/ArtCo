@@ -14,8 +14,8 @@ from services.concierge import run
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(
-    title="Art Concierge",
-    description="A personal art concierge for cultural discovery, artwork research and acquisition.",
+    title="ArtCo | Your personal art concierge",
+    description="ArtCo is a personal art concierge for cultural discovery, artwork research, curation and acquisition.",
     version="0.3.0",
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")

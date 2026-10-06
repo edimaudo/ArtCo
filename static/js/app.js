@@ -59,7 +59,7 @@
       taste: 'Develop my taste',
       curate: 'Curate a set of works',
       buy: 'Find art to buy',
-      keep_discovering: 'Keep discovering',
+      learn: 'Learn about art',
     }[intent] || 'New request';
   }
 
@@ -168,7 +168,7 @@
       taste: ['What are you curious about?', 'Give me a few cultural references and I’ll use them to open up new directions.'],
       curate: ['What should work together?', 'Tell me about the space, mood, or idea you want to bring together.'],
       buy: ['What would you like to buy?', 'Tell me what you can spend, where you are, and how far you want me to explore.'],
-      keep_discovering: ['What should I explore next?', 'I’ll build from the things you’ve already told me you like.'],
+      learn: ['What would you like to understand?', 'Ask about an artist, artwork, movement, or idea and I’ll research it for you.'],
     }[intent] || ['What are you looking for?', 'Start naturally and I’ll take it from there.'];
   }
 
@@ -201,7 +201,7 @@
     if (/curate|collection|set of|several/.test(lower)) return 'curate';
     if (/learn.*taste|develop.*taste|understand.*like/.test(lower)) return 'taste';
     if (/specific|looking for|need a|find me/.test(lower)) return 'find';
-    if (/again|continue|keep/.test(lower)) return 'keep_discovering';
+    if (/artist|artwork|movement|history|about|learn|explain|who is|what is/.test(lower)) return 'learn';
     return 'discover';
   }
 
@@ -334,7 +334,7 @@
       taste: 'Artists and works to explore.',
       curate: 'Works that make sense together.',
       buy: 'Art you can act on now.',
-      keep_discovering: 'Your next discoveries.',
+      learn: 'Art worth understanding.',
     };
     $('#resultsHeading').textContent = labels[intent] || labels.discover;
     $('#resultsSummary').textContent = data.summary || '';

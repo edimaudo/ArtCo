@@ -11,7 +11,7 @@ class Intent(str, Enum):
     taste = "taste"
     curate = "curate"
     buy = "buy"
-    keep_discovering = "keep_discovering"
+    learn = "learn"
 
 
 class ConciergeRequest(BaseModel):

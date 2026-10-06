@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Art Concierge helps you discover, choose and acquire art that fits your taste.">
-  <title>{% block title %}ArtCo{% endblock %}</title>
+  <meta name="description" content="ArtCo is your personal art concierge for discovering, finding, understanding, curating, and acquiring art.">
+  <title>{% block title %}ArtCo | Your personal art concierge{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,7 +13,7 @@
 <body>
 <div class="app-root">
   <header class="topbar{% if page == 'home' %} topbar--landing{% endif %}" role="banner">
-    <a class="brand" href="{% if page == 'home' %}/{% else %}/dashboard{% endif %}" aria-label="{% if page == 'home' %}Art Concierge home{% else %}Art Concierge dashboard{% endif %}">ART CONCIERGE</a>
+    <a class="brand" href="{% if page == 'home' %}/{% else %}/dashboard{% endif %}" aria-label="{% if page == 'home' %}ArtCo home{% else %}ArtCo dashboard{% endif %}">ArtCo</a>
     {% if page != 'home' %}
     <nav class="primary-nav" aria-label="Primary navigation">
       <a href="/concierge" data-page="concierge">Concierge</a>

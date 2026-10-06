@@ -267,7 +267,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "taste": "I started close to the preferences you gave me, then explored related artists and directions that can help you discover what you respond to.",
         "curate": "I looked for works that fit your taste and can make sense together in the context you described.",
         "buy": "I prioritised artwork marked as available from commercial sources. Institutional works are kept separate as cultural references.",
-        "keep_discovering": "I used your current taste as the starting point and introduced adjacent directions so the next discoveries can build on this search.",
+        "learn": "I researched the artistic direction you asked about and selected works that help you understand it in context.",
     }[request.intent.value]
 
     commercial_found = sum(work.source_kind == "commercial" for work in works)
