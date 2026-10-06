@@ -18,11 +18,9 @@ For purchasing requests, commercial providers are searched first. Institutional 
 
 ## Stack
 
-- FastAPI
-- Jinja2
-- Vanilla CSS + JS
-- Qloo API
-- Optional Gemini SDK
+- **Backend**: FastAPI
+- **Front-end**: Jinja2 + Vanilla CSS + JS
+- **AI*: Qloo API + Gemini SDK
 
 
 ## Run
