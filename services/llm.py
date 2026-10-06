@@ -92,6 +92,7 @@ async def extract_request_signals(
     request_text: str,
     existing_loves: list[str],
     existing_interests: list[str],
+    avoid_references: list[str] | None = None,
 ) -> RequestSignals:
     """Extract actionable signals from the user's natural-language brief."""
     prompt = f"""
@@ -103,6 +104,7 @@ or other recognizable cultural entities.
 
 Existing saved references: {existing_loves}
 Existing art interests: {existing_interests}
+Avoid references: {avoid_references or []}
 User request:
 {request_text}
 

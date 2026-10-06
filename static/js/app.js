@@ -1,10 +1,12 @@
 (() => {
   const storage = {
-    profile: 'artConciergeProfile',
-    saved: 'artConciergeSaved',
-    recent: 'artConciergeRecent',
-    last: 'artConciergeLastResult',
+    profile: 'artCoProfile',
+    saved: 'artCoSaved',
+    recent: 'artCoRecent',
+    last: 'artCoLastResult',
+    stateVersion: 'artCoStateVersion',
   };
+  const STATE_VERSION = 2;
 
   const readJson = (key, fallback) => {
     try {
@@ -15,15 +17,34 @@
     }
   };
 
-  const profile = readJson(storage.profile, {});
+  function migrateState() {
+    const version = Number(localStorage.getItem(storage.stateVersion) || 0);
+    if (version < 1) {
+      const legacyProfile = readJson('artConciergeProfile', null);
+      const legacySaved = readJson('artConciergeSaved', null);
+      const legacyRecent = readJson('artConciergeRecent', null);
+      const legacyLast = readJson('artConciergeLastResult', null);
+      if (legacyProfile && !localStorage.getItem(storage.profile)) localStorage.setItem(storage.profile, JSON.stringify(legacyProfile));
+      if (legacySaved && !localStorage.getItem(storage.saved)) localStorage.setItem(storage.saved, JSON.stringify(legacySaved));
+      if (legacyRecent && !localStorage.getItem(storage.recent)) localStorage.setItem(storage.recent, JSON.stringify(legacyRecent));
+      if (legacyLast && !localStorage.getItem(storage.last)) localStorage.setItem(storage.last, JSON.stringify(legacyLast));
+    }
+    localStorage.setItem(storage.stateVersion, String(STATE_VERSION));
+  }
+
+  migrateState();
+
+  const storedProfile = readJson(storage.profile, {});
   const state = {
     profile: {
-      loves: Array.isArray(profile.loves) ? profile.loves.slice(0, 12) : [],
-      notes: String(profile.notes || ''),
-      discoveryLevel: Number(profile.discoveryLevel ?? 50),
+      loves: Array.isArray(storedProfile.loves) ? storedProfile.loves.slice(0, 12) : [],
+      avoids: Array.isArray(storedProfile.avoids || storedProfile.avoid_references) ? (storedProfile.avoids || storedProfile.avoid_references).slice(0, 12) : [],
+      notes: String(storedProfile.notes || ''),
+      discoveryLevel: Number(storedProfile.discoveryLevel ?? 50),
+      updatedAt: storedProfile.updatedAt || null,
     },
-    saved: readJson(storage.saved, []).slice(0, 40),
-    recent: readJson(storage.recent, []).slice(0, 8),
+    saved: Array.isArray(readJson(storage.saved, [])) ? readJson(storage.saved, []).slice(0, 40) : [],
+    recent: Array.isArray(readJson(storage.recent, [])) ? readJson(storage.recent, []).slice(0, 8) : [],
     last: readJson(storage.last, null),
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
   };
@@ -32,6 +53,7 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
   function saveProfile() {
+    state.profile.updatedAt = new Date().toISOString();
     localStorage.setItem(storage.profile, JSON.stringify(state.profile));
   }
 
@@ -45,11 +67,16 @@
       id: `${Date.now()}`,
       intent: request.intent,
       prompt: request.goal || intentLabel(request.intent),
-      savedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      request: structuredCloneSafe(request),
       data: result,
     };
     state.recent = [item, ...state.recent.filter((entry) => entry.prompt !== item.prompt)].slice(0, 8);
     localStorage.setItem(storage.recent, JSON.stringify(state.recent));
+  }
+
+  function structuredCloneSafe(value) {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
   }
 
   function intentLabel(intent) {
@@ -109,7 +136,7 @@
       <article class="recent-item">
         <div class="recent-copy">
           <div class="recent-title">${escapeHtml(item.prompt)}</div>
-          <div class="recent-meta">${escapeHtml(intentLabel(item.intent))} · ${escapeHtml(new Date(item.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</div>
+          <div class="recent-meta">${escapeHtml(intentLabel(item.intent))} · ${escapeHtml(new Date(item.createdAt || item.savedAt || Date.now()).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</div>
         </div>
         <button class="secondary-button recent-open" type="button" data-recent-id="${escapeAttribute(item.id)}">Continue</button>
       </article>`;
@@ -190,6 +217,29 @@
     saveProfile();
   }
 
+  function addProfileAvoid(value) {
+    const clean = value.trim().replace(/,$/, '');
+    if (!clean || state.profile.avoids.includes(clean) || state.profile.avoids.length >= 12) return;
+    state.profile.avoids.push(clean);
+    state.profile.loves = state.profile.loves.filter((item) => item.toLowerCase() !== clean.toLowerCase());
+    saveProfile();
+  }
+
+  function learnFromFeedback(feedback, artwork) {
+    if (!artwork?.artist) return;
+    const artist = artwork.artist.trim();
+    if (/^More like/i.test(feedback || '')) {
+      if (!state.profile.loves.some((item) => item.toLowerCase() === artist.toLowerCase())) {
+        state.profile.loves.push(artist);
+      }
+      state.profile.avoids = state.profile.avoids.filter((item) => item.toLowerCase() !== artist.toLowerCase());
+      state.profile.loves = state.profile.loves.slice(-12);
+      saveProfile();
+    } else if (/^Not for me/i.test(feedback || '')) {
+      addProfileAvoid(artist);
+    }
+  }
+
   function parseBudget(text) {
     const match = text.replace(/,/g, '').match(/(?:\$|CAD\s?)?(\d{3,7})/i);
     return match ? Number(match[1]) : null;
@@ -211,6 +261,7 @@
     return {
       intent: inferred,
       loves: [...state.profile.loves],
+      avoid_references: [...state.profile.avoids],
       additional_interests: [],
       art_interests: [],
       mediums: [],
@@ -319,8 +370,8 @@
           <div class="art-actions">
             ${link}
             <button class="card-action save-action" type="button" data-id="${id}" aria-pressed="${saved}">${saved ? 'Saved' : 'Save'}</button>
-            <button class="card-action feedback-action" type="button" data-feedback="More like ${escapeAttribute(work.artist || work.title)}">More like this</button>
-            <button class="card-action feedback-action" type="button" data-feedback="Not for me: ${escapeAttribute(work.artist || work.title)}">Not for me</button>
+            <button class="card-action feedback-action" type="button" data-id="${id}" data-feedback="More like ${escapeAttribute(work.artist || work.title)}">More like this</button>
+            <button class="card-action feedback-action" type="button" data-id="${id}" data-feedback="Not for me: ${escapeAttribute(work.artist || work.title)}">Not for me</button>
           </div>
         </div>
       </article>`;
@@ -391,12 +442,20 @@
 
   function renderTastePage() {
     const chips = $('#tasteChips');
+    const avoids = $('#avoidChips');
     const notes = $('#tasteNotes');
+    const slider = $('#discoveryLevel');
+    const updated = $('#tasteUpdated');
     if (!chips || !notes) return;
     chips.innerHTML = state.profile.loves.map((value, index) => `
-      <span class="chip">${escapeHtml(value)} <button type="button" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)}">×</button></span>
+      <span class="chip">${escapeHtml(value)} <button type="button" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)} from things you love">×</button></span>
+    `).join('');
+    if (avoids) avoids.innerHTML = state.profile.avoids.map((value, index) => `
+      <span class="chip">${escapeHtml(value)} <button type="button" data-remove-list="avoids" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)} from things you avoid">×</button></span>
     `).join('');
     notes.value = state.profile.notes;
+    if (slider) slider.value = String(state.profile.discoveryLevel);
+    if (updated) updated.textContent = state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved';
   }
 
   function handleGlobalClicks() {
@@ -406,15 +465,21 @@
 
       const feedback = event.target.closest('.feedback-action');
       if (feedback) {
+        const artwork = getArtworkById(feedback.dataset.id);
+        const text = feedback.dataset.feedback || '';
+        learnFromFeedback(text, artwork);
         const input = $('#feedback');
-        if (input) { input.value = feedback.dataset.feedback || ''; input.focus(); }
+        if (input) { input.value = text; input.focus(); }
         return;
       }
 
       const recent = event.target.closest('.recent-open');
       if (recent) {
         const item = state.recent.find((entry) => entry.id === recent.dataset.recentId);
-        if (item?.data) {
+        if (item?.request) {
+          localStorage.setItem('artCoResumeRequest', JSON.stringify(item.request));
+          window.location.href = `/concierge?intent=${encodeURIComponent(item.intent)}&resume=1`;
+        } else if (item?.data) {
           saveLastResult(item.data);
           window.location.href = `/results?intent=${encodeURIComponent(item.intent)}`;
         }
@@ -433,7 +498,8 @@
 
       const remove = event.target.closest('[data-remove-index]');
       if (remove) {
-        state.profile.loves.splice(Number(remove.dataset.removeIndex), 1);
+        const list = remove.dataset.removeList === 'avoids' ? state.profile.avoids : state.profile.loves;
+        list.splice(Number(remove.dataset.removeIndex), 1);
         saveProfile();
         renderTastePage();
       }
@@ -446,6 +512,21 @@
   function initConcierge() {
     setIntent(state.intent);
     renderTasteInConcierge();
+    const resume = new URLSearchParams(window.location.search).get('resume');
+    if (resume === '1') {
+      try {
+        const request = readJson('artCoResumeRequest', null);
+        if (request?.goal) {
+          const input = $('#requestInput');
+          if (input) input.value = request.goal;
+          const history = $('#conversationHistory');
+          if (history) {
+            history.innerHTML = `<div class="conversation-entry"><p class="label">Previous request</p><p>${escapeHtml(request.goal)}</p></div><div class="conversation-entry"><p class="label">Continue from here</p><p>Refine the request, add a preference, or ask me to take it in a new direction.</p></div>`;
+          }
+        }
+        localStorage.removeItem('artCoResumeRequest');
+      } catch {}
+    }
     const form = $('#requestForm');
     const input = $('#requestInput');
     form?.addEventListener('submit', (event) => {
@@ -503,12 +584,34 @@
         renderTastePage();
       }
     });
+    $('#avoidInput')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ',') {
+        event.preventDefault();
+        addProfileAvoid(event.target.value);
+        event.target.value = '';
+        renderTastePage();
+      }
+    });
+    $('#avoidInput')?.addEventListener('blur', (event) => {
+      if (event.target.value.trim()) {
+        addProfileAvoid(event.target.value);
+        event.target.value = '';
+        renderTastePage();
+      }
+    });
     $('#tasteNotes')?.addEventListener('input', (event) => {
       state.profile.notes = event.target.value;
       saveProfile();
     });
+    $('#discoveryLevel')?.addEventListener('input', (event) => {
+      state.profile.discoveryLevel = Number(event.target.value);
+      saveProfile();
+      const label = $('#discoveryValue');
+      if (label) label.textContent = `${state.profile.discoveryLevel}%`;
+    });
     $('#saveTaste')?.addEventListener('click', () => {
       saveProfile();
+      renderTastePage();
       const button = $('#saveTaste');
       button.textContent = 'Saved';
       window.setTimeout(() => { button.textContent = 'Save my taste'; }, 1400);

@@ -462,3 +462,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 @media (max-width: 860px) {
   .dashboard-header, .dashboard-layout, .dashboard-taste { grid-template-columns: 1fr; }
 }
+
+/* Persistent taste profile */
+.taste-section-block { margin-top: 46px; }
+.taste-notes { margin-top: 38px; }
+.discovery-control { margin-top: 38px; }
+.discovery-copy p { margin-top: 8px; color: var(--muted); font-size: .87rem; line-height: 1.55; }
+.range-line { margin-top: 16px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 14px; align-items: center; color: var(--muted); font-size: .78rem; }
+.range-line input[type="range"] { width: 100%; accent-color: var(--accent); }
+.range-line span:last-child { min-width: 42px; text-align: right; color: var(--text); font-weight: 600; }
+.taste-save-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }

@@ -21,6 +21,7 @@ async def _resolve_entities(
         dict.fromkeys(
             [
                 *request.loves,
+                *request.avoid_references,
                 *signals.cultural_references,
                 *request.art_interests,
                 *request.additional_interests,
@@ -84,7 +85,7 @@ async def _build_search_plan(
             list(dict.fromkeys(request.mediums + signals.mediums)),
             qloo_artists,
             request.discovery_level,
-            feedback=request.feedback,
+            feedback=(request.feedback or "") + (f" Avoid references: {request.avoid_references}" if request.avoid_references else ""),
             room=request.room or signals.room,
             budget_max=request.budget_max if request.budget_max is not None else signals.budget_max,
             preferred_market=request.preferred_market or signals.market,
@@ -143,6 +144,9 @@ def _deterministic_score(
     ).lower()
     score = 0.0
     qloo_names = {str(item.get("name") or "").lower() for item in qloo_artists if item.get("name")}
+    avoid_names = {str(value).strip().lower() for value in request.avoid_references if str(value).strip()}
+    if work.artist.strip().lower() in avoid_names or any(value in work.artist.strip().lower() for value in avoid_names):
+        score -= 35
     if work.artist.lower() in qloo_names or any(name and name in work.artist.lower() for name in qloo_names):
         score += 18
     request_terms = set()
@@ -295,6 +299,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         request.goal or "",
         request.loves,
         request.additional_interests + request.art_interests,
+        request.avoid_references,
     )
     request = _apply_signal_overrides(request, signals)
 
@@ -378,6 +383,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "brief": {
             "intent": request.intent.value,
             "request": request.goal or "",
+            "avoid_references": request.avoid_references,
             "art_interests": request.art_interests,
             "mediums": request.mediums,
             "room": request.room,
@@ -390,6 +396,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         },
         "taste": {
             "inputs": list(dict.fromkeys(request.loves + signals.cultural_references + request.additional_interests))[:12],
+            "avoid_references": request.avoid_references[:12],
             "resolved": resolved[:10],
             "related_artists": qloo_artists[:8],
         },

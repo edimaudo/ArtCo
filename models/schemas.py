@@ -17,6 +17,7 @@ class Intent(str, Enum):
 class ConciergeRequest(BaseModel):
     intent: Intent = Intent.discover
     loves: list[str] = Field(default_factory=list, max_length=12)
+    avoid_references: list[str] = Field(default_factory=list, max_length=12)
     additional_interests: list[str] = Field(default_factory=list, max_length=8)
     art_interests: list[str] = Field(default_factory=list, max_length=8)
     mediums: list[str] = Field(default_factory=list, max_length=8)

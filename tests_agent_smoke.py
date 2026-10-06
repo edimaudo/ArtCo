@@ -29,7 +29,7 @@ def work(id_: str, artist: str, source_kind: str = "institution", availability: 
 async def main():
     calls = {"extract": [], "qloo_search": [], "plan": [], "review": []}
 
-    async def fake_extract(goal, existing_loves, existing_interests):
+    async def fake_extract(goal, existing_loves, existing_interests, avoid_references=None):
         calls["extract"].append(goal)
         return SimpleNamespace(
             cultural_references=["Issey Miyake", "Radiohead"], art_interests=["minimalism"],
