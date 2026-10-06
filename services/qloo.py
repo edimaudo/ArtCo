@@ -94,6 +94,8 @@ def _extract_entities(payload: dict[str, Any]) -> list[dict[str, Any]]:
         properties = item.get("properties") or {}
         query_info = item.get("query") or {}
         explainability = query_info.get("explainability") or item.get("explainability")
+        if explainability is None and isinstance(item.get("query"), dict):
+            explainability = item["query"].get("explainability")
         output.append(
             {
                 "id": item.get("entity_id") or item.get("id"),
