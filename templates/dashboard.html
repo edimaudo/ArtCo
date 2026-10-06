@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Art Concierge{% endblock %}
+{% block content %}
+<section class="workspace-page shell dashboard-page">
+  <div class="dashboard-header">
+    <div>
+      <h1>Welcome back.</h1>
+      <p class="lede">Pick up an earlier search, revisit something you saved, or start a new conversation.</p>
+    </div>
+    <a class="primary-button" href="/concierge">Ask my concierge <span aria-hidden="true">→</span></a>
+  </div>
+
+  <div class="dashboard-layout">
+    <section class="dashboard-section recent-section" aria-labelledby="recentHeading">
+      <div class="section-heading dashboard-heading">
+        <div>
+          <h2 id="recentHeading">Continue where you left off</h2>
+          <p>Your recent conversations stay here so you can continue without starting over.</p>
+        </div>
+      </div>
+      <div id="dashboardRecent" class="recent-list"></div>
+    </section>
+
+    <section class="dashboard-section saved-section" aria-labelledby="dashboardSavedHeading">
+      <div class="section-heading dashboard-heading">
+        <div>
+          <h2 id="dashboardSavedHeading">Saved art</h2>
+          <p>Works you decided were worth keeping.</p>
+        </div>
+        <a class="section-link" href="/saved">View all</a>
+      </div>
+      <div id="dashboardSaved" class="saved-preview dashboard-saved-preview"></div>
+      <p id="dashboardSavedEmpty" class="empty-state" hidden>You haven't saved any works yet.</p>
+    </section>
+  </div>
+
+  <section class="dashboard-taste" aria-labelledby="dashboardTasteHeading">
+    <div>
+      <h2 id="dashboardTasteHeading">Your taste</h2>
+      <p id="dashboardTasteCopy">Add a few cultural references to give your concierge more to work with.</p>
+    </div>
+    <div id="dashboardTasteChips" class="chips"></div>
+    <a class="secondary-button" href="/taste">Manage my taste</a>
+  </section>
+</section>
+{% endblock %}

@@ -27,6 +27,11 @@ async def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="home.html", context={"page": "home"})
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={"page": "dashboard"})
+
+
 @app.get("/concierge", response_class=HTMLResponse)
 async def concierge_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="concierge.html", context={"page": "concierge"})

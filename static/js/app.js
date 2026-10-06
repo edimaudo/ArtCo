@@ -104,31 +104,53 @@
     });
   }
 
-  function renderHome() {
-    const recent = $('#recentList');
-    if (!recent) return;
-    if (!state.recent.length) {
-      recent.innerHTML = '<p class="empty-state">Your recent conversations will appear here.</p>';
-    } else {
-      recent.innerHTML = state.recent.slice(0, 4).map((item) => `
-        <div class="recent-item">
-          <div>
-            <div class="recent-title">${escapeHtml(item.prompt)}</div>
-            <div class="recent-meta">${escapeHtml(intentLabel(item.intent))}</div>
-          </div>
-          <button class="secondary-button recent-open" type="button" data-recent-id="${escapeAttribute(item.id)}">Open</button>
+  function recentMarkup(item) {
+    return `
+      <article class="recent-item">
+        <div class="recent-copy">
+          <div class="recent-title">${escapeHtml(item.prompt)}</div>
+          <div class="recent-meta">${escapeHtml(intentLabel(item.intent))} · ${escapeHtml(new Date(item.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</div>
         </div>
-      `).join('');
+        <button class="secondary-button recent-open" type="button" data-recent-id="${escapeAttribute(item.id)}">Continue</button>
+      </article>`;
+  }
+
+  function renderDashboard() {
+    const recent = $('#dashboardRecent');
+    const saved = $('#dashboardSaved');
+    const savedEmpty = $('#dashboardSavedEmpty');
+    const tasteChips = $('#dashboardTasteChips');
+    if (!recent && !saved) return;
+
+    if (recent) {
+      recent.innerHTML = state.recent.length
+        ? state.recent.slice(0, 5).map(recentMarkup).join('')
+        : '<p class="empty-state">Your recent conversations will appear here after your first search.</p>';
     }
 
-    const preview = $('#savedPreview');
-    if (!preview) return;
-    const saved = state.saved.slice(0, 3);
-    preview.innerHTML = saved.length
-      ? saved.map((work) => work.image_url
-        ? `<button class="saved-thumb" type="button" data-saved-id="${escapeAttribute(work.id)}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}"><img src="${escapeAttribute(work.image_url)}" alt=""></button>`
-        : `<button class="saved-thumb no-image" type="button" data-saved-id="${escapeAttribute(work.id)}">${escapeHtml(work.title || 'Saved artwork')}</button>`).join('')
-      : '<p class="empty-state">Save works from a conversation and they will stay here.</p>';
+    if (saved) {
+      const works = state.saved.slice(0, 3);
+      saved.innerHTML = works.map((work) => {
+        const id = escapeAttribute(work.id);
+        const image = work.image_url
+          ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
+          : '<div class="saved-thumb no-image">Image unavailable</div>';
+        return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
+      }).join('');
+      if (savedEmpty) savedEmpty.hidden = works.length > 0;
+    }
+
+    if (tasteChips) {
+      tasteChips.innerHTML = state.profile.loves.slice(0, 8).map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
+    }
+    const tasteCopy = $('#dashboardTasteCopy');
+    if (tasteCopy && state.profile.loves.length) {
+      tasteCopy.textContent = `${state.profile.loves.length} reference${state.profile.loves.length === 1 ? '' : 's'} saved. Your concierge can use them in future searches.`;
+    }
+  }
+
+  function renderHome() {
+    // The landing page is intentionally focused on the product proposition and primary CTA.
   }
 
   function renderTasteInConcierge() {
@@ -417,6 +439,7 @@
   }
 
   function initHome() { renderHome(); }
+  function initDashboard() { renderDashboard(); }
 
   function initConcierge() {
     setIntent(state.intent);
@@ -497,6 +520,7 @@
 
   switch (window.ART_CONCIERGE_PAGE) {
     case 'home': initHome(); break;
+    case 'dashboard': initDashboard(); break;
     case 'concierge': initConcierge(); break;
     case 'results': initResults(); break;
     case 'saved': initSaved(); break;

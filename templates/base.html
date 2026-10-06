@@ -12,13 +12,15 @@
 </head>
 <body>
 <div class="app-root">
-  <header class="topbar" role="banner">
-    <a class="brand" href="/" aria-label="Art Concierge home">ART CONCIERGE</a>
+  <header class="topbar{% if page == 'home' %} topbar--landing{% endif %}" role="banner">
+    <a class="brand" href="{% if page == 'home' %}/{% else %}/dashboard{% endif %}" aria-label="{% if page == 'home' %}Art Concierge home{% else %}Art Concierge dashboard{% endif %}">ART CONCIERGE</a>
+    {% if page != 'home' %}
     <nav class="primary-nav" aria-label="Primary navigation">
       <a href="/concierge" data-page="concierge">Concierge</a>
       <a href="/taste" data-page="taste">My Taste</a>
       <a href="/saved" data-page="saved">Saved</a>
     </nav>
+    {% endif %}
     <div class="topbar-actions">
       <button class="icon-button" id="themeToggle" type="button" aria-label="Switch to dark mode">◐</button>
       <label class="font-control" for="fontScale">
