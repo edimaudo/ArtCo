@@ -11,7 +11,6 @@ Six user jobs share one concierge:
 - Develop my taste
 - Curate
 - Buy
-- Keep discovering
 
 The user gives a compact brief. Qloo resolves broader cultural inputs and returns artist affinities. 
 For purchasing requests, commercial providers are searched first. Institutional sources are used for fallback discovery and clearly labeled **NOT FOR SALE**.
