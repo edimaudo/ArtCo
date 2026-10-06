@@ -2,7 +2,7 @@
 
 An art discovery & Concierge.
 
-## Product model
+## Product Design
 
 Six user jobs share one concierge:
 
@@ -13,7 +13,7 @@ Six user jobs share one concierge:
 - Buy
 - Keep discovering
 
-The user gives a compact brief. Qloo resolves broader cultural inputs and returns artist affinities. The LangGraph workflow converts that context into search directions. Artwork providers then supply actual works.
+The user gives a compact brief. Qloo resolves broader cultural inputs and returns artist affinities. 
 For purchasing requests, commercial providers are searched first. Institutional sources are used for fallback discovery and clearly labeled **NOT FOR SALE**.
 
 ## Stack
