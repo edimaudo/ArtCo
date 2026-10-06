@@ -380,6 +380,8 @@
   function renderSavedPage() {
     const grid = $('#savedGrid');
     if (!grid) return;
+    const count = $('#savedCount');
+    if (count) count.textContent = state.saved.length ? `${state.saved.length} saved work${state.saved.length === 1 ? '' : 's'}` : '';
     if (!state.saved.length) {
       grid.innerHTML = '<p class="empty-state">You have not saved any works yet. Start a conversation with your concierge to find something worth keeping.</p>';
       return;

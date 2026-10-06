@@ -1,53 +1,56 @@
 {% extends "base.html" %}
-{% block title %}ArtCo | Your Concierge{% endblock %}
+{% block title %}ArtCo | Concierge{% endblock %}
 {% block content %}
 <section class="workspace-page shell concierge-page">
-  <div class="workspace-header">
-    <div>
-      <h1 id="conciergeTitle">What are you looking for?</h1>
-      <p class="lede" id="conciergeLede">Start naturally. Give me as much or as little as you know.</p>
+  <div class="concierge-shell">
+    <header class="concierge-header">
+      <div>
+        <h1 id="conciergeTitle">What can I help you find?</h1>
+        <p class="lede" id="conciergeLede">Tell me what you are looking for, what you love, or how you want the art to feel. I’ll take it from there.</p>
+      </div>
+    </header>
+
+    <div class="concierge-main">
+      <section class="conversation-panel" aria-labelledby="conversationHeading">
+        <h2 id="conversationHeading" class="sr-only">Concierge conversation</h2>
+        <div id="conversationHistory" class="conversation-history" aria-live="polite"></div>
+
+        <form id="requestForm" class="request-composer">
+          <label for="requestInput">What would you like help with?</label>
+          <textarea id="requestInput" rows="6" placeholder="For example: Find me contemporary photography for my living room, under $5,000, with the kind of restraint I like in Japanese design."></textarea>
+          <div class="composer-footer">
+            <span id="requestHint">You can be as specific or as open-ended as you like.</span>
+            <button class="primary-button" type="submit">Ask my concierge <span aria-hidden="true">→</span></button>
+          </div>
+        </form>
+
+        <div class="service-choices" aria-labelledby="serviceHeading">
+          <div class="service-choices-heading">
+            <h2 id="serviceHeading">Or choose what you need</h2>
+            <p>Pick a starting point and I’ll shape the search around it.</p>
+          </div>
+          <div class="intent-grid" id="intentList">
+            <button type="button" data-intent="discover"><strong>Discover</strong><span>Take me somewhere new.</span></button>
+            <button type="button" data-intent="find"><strong>Find</strong><span>I have something specific in mind.</span></button>
+            <button type="button" data-intent="taste"><strong>Develop my taste</strong><span>Help me understand what I respond to.</span></button>
+            <button type="button" data-intent="curate"><strong>Curate</strong><span>Bring works together around a space or idea.</span></button>
+            <button type="button" data-intent="buy"><strong>Buy</strong><span>Find art that is available to acquire.</span></button>
+            <button type="button" data-intent="learn"><strong>Learn about art</strong><span>Go deeper on an artist, work, or movement.</span></button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="concierge-side" aria-label="Your taste">
+        <div class="taste-side-card">
+          <div class="context-heading">
+            <h2>Your taste</h2>
+            <a class="secondary-button compact-button" href="/taste">Manage</a>
+          </div>
+          <div id="savedTaste" class="chips"></div>
+          <p id="savedTasteEmpty" class="context-empty">Add a few things you love to give your concierge more context.</p>
+        </div>
+      </aside>
     </div>
-  </div>
-
-  <div class="concierge-layout">
-    <section class="conversation-panel" aria-labelledby="conversationHeading">
-      <h2 id="conversationHeading" class="sr-only">Concierge conversation</h2>
-      <div id="conversationIntro" class="conversation-intro">
-        <p class="concierge-prompt">What should I help you with?</p>
-        <p class="conversation-hint">You can mention artists, music, films, fashion, places, the space the art is for, your budget, or simply how you want it to feel.</p>
-      </div>
-      <div id="conversationHistory" class="conversation-history"></div>
-      <form id="requestForm" class="request-composer">
-        <label for="requestInput">Your request</label>
-        <textarea id="requestInput" rows="5" placeholder="Find me something for my living room that feels calm but not predictable."></textarea>
-        <div class="composer-footer">
-          <span id="requestHint">Press Enter with ⌘/Ctrl to send.</span>
-          <button class="primary-button" type="submit">Ask my concierge <span aria-hidden="true">→</span></button>
-        </div>
-      </form>
-    </section>
-
-    <aside class="context-panel" aria-label="Request context">
-      <div class="context-block">
-        <h2>Start anywhere</h2>
-        <div class="intent-list" id="intentList">
-          <button type="button" data-intent="discover">Discover</button>
-          <button type="button" data-intent="find">Find</button>
-          <button type="button" data-intent="taste">Develop my taste</button>
-          <button type="button" data-intent="curate">Curate</button>
-          <button type="button" data-intent="buy">Buy</button>
-          <button type="button" data-intent="learn">Learn about art</button>
-        </div>
-      </div>
-      <div class="context-block" id="savedTasteBlock">
-        <div class="context-heading">
-          <h2>What you already like</h2>
-          <a href="/taste">Edit</a>
-        </div>
-        <div id="savedTaste" class="chips"></div>
-        <p id="savedTasteEmpty" class="context-empty">Your taste profile will build as you use the concierge.</p>
-      </div>
-    </aside>
   </div>
 </section>
 {% endblock %}

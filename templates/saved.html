@@ -1,14 +1,21 @@
 {% extends "base.html" %}
-{% block title %}ArtCo | Saved{% endblock %}
+{% block title %}ArtCo | Saved art{% endblock %}
 {% block content %}
 <section class="workspace-page shell saved-page">
-  <div class="workspace-header">
+  <header class="workspace-header saved-header">
     <div>
-      <h1>Keep what catches your eye.</h1>
-      <p class="lede">Save works during your conversations and return to them whenever you're ready.</p>
+      <h1>Your saved art.</h1>
+      <p class="lede">Keep the works you want to return to, compare, or explore further.</p>
     </div>
-    <a class="primary-button" href="/concierge">Ask my concierge</a>
-  </div>
-  <div id="savedGrid" class="art-grid saved-grid"></div>
+    <a class="primary-button" href="/concierge">Ask my concierge <span aria-hidden="true">→</span></a>
+  </header>
+
+  <section class="saved-library" aria-labelledby="savedHeading">
+    <div class="saved-library-heading">
+      <h2 id="savedHeading">Saved works</h2>
+      <p id="savedCount" class="saved-count" aria-live="polite"></p>
+    </div>
+    <div id="savedGrid" class="art-grid saved-grid"></div>
+  </section>
 </section>
 {% endblock %}

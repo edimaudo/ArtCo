@@ -2,32 +2,44 @@
 {% block title %}ArtCo | My Taste{% endblock %}
 {% block content %}
 <section class="workspace-page shell taste-page">
-  <div class="workspace-header">
+  <header class="workspace-header taste-header">
     <div>
-      <h1>Keep telling me what you like.</h1>
-      <p class="lede">Your references stay with you, so every conversation can start from a richer understanding of your taste.</p>
+      <h1>Your taste, over time.</h1>
+      <p class="lede">Keep the artists, music, films, places, design, books, and other references that help your concierge understand what you love.</p>
     </div>
-    <a class="primary-button" href="/concierge?intent=taste&new=1">Explore my taste</a>
-  </div>
+    <a class="primary-button" href="/concierge">Ask my concierge <span aria-hidden="true">→</span></a>
+  </header>
 
-  <section class="taste-workspace">
-    <div class="taste-editor">
-      <h2>Your references</h2>
-      <p>Add artists, music, films, fashion, places, books, brands, or anything else you genuinely love.</p>
+  <div class="taste-workspace">
+    <section class="taste-editor" aria-labelledby="tasteReferencesHeading">
+      <div class="taste-section-heading">
+        <h2 id="tasteReferencesHeading">Things you love</h2>
+        <p>These references become part of your ongoing concierge profile.</p>
+      </div>
       <div class="reference-entry">
         <div id="tasteChips" class="chips"></div>
-        <input id="tasteInput" type="text" placeholder="Try Radiohead, Tokyo, Issey Miyake…" aria-label="Add a taste reference">
+        <label class="sr-only" for="tasteInput">Add something you love</label>
+        <input id="tasteInput" type="text" placeholder="Add an artist, film, designer, place, brand…" aria-label="Add something you love">
       </div>
-      <p class="field-note">Press Enter after each reference.</p>
-      <label class="field-label" for="tasteNotes">Anything else I should know</label>
-      <textarea id="tasteNotes" rows="6" placeholder="Tell your concierge about styles, experiences or things you usually avoid."></textarea>
-      <div class="taste-save-row"><button class="primary-button" id="saveTaste" type="button">Save my taste</button></div>
-    </div>
-    <aside class="taste-side">
-      <h2>How your taste helps</h2>
-      <p>Your concierge uses these references when exploring new directions, finding specific works and refining future searches.</p>
-      <a class="secondary-button" href="/concierge">Start a new request</a>
+      <p class="field-note">Press Enter to add another reference.</p>
+
+      <div class="taste-notes">
+        <label class="field-label" for="tasteNotes">Anything else I should know</label>
+        <textarea id="tasteNotes" rows="7" placeholder="Tell your concierge about styles you enjoy, things you avoid, or how you want to explore."></textarea>
+      </div>
+      <div class="taste-save-row"><button class="primary-button" id="saveTaste" type="button">Save changes</button></div>
+    </section>
+
+    <aside class="taste-side taste-profile-card" aria-labelledby="tasteProfileHeading">
+      <div>
+        <h2 id="tasteProfileHeading">How this helps</h2>
+        <p>Your concierge uses these references to make future searches more relevant and to find connections you may not have considered.</p>
+      </div>
+      <div class="taste-profile-actions">
+        <a class="secondary-button" href="/concierge?intent=taste&new=1">Explore my taste</a>
+        <a class="secondary-button" href="/concierge">Start a request</a>
+      </div>
     </aside>
-  </section>
+  </div>
 </section>
 {% endblock %}
