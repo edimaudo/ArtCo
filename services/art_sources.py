@@ -6,7 +6,15 @@ from typing import Any, Protocol
 
 import httpx
 
-from .config import ARTSY_PARTNER_ID, ARTSY_XAPP_TOKEN, ARTLOGIC_FEED_URL, ARTWORK_RESULT_LIMIT, REQUEST_TIMEOUT
+from .config import (
+    ARTSY_PARTNER_ID,
+    ARTSY_XAPP_TOKEN,
+    ARTLOGIC_FEED_URL,
+    ARTWORK_RESULT_LIMIT,
+    COLLECT24_API_KEY,
+    COLLECT24_BASE_URL,
+    REQUEST_TIMEOUT,
+)
 
 
 @dataclass(slots=True)
@@ -209,6 +217,71 @@ class ArtsyProvider:
             ][:limit]
 
 
+class Collect24Provider:
+    """Optional commercial artwork registry adapter.
+
+    Collect24 exposes public artwork records with explicit availability and
+    public price fields. Access requires a server-side API key. The provider
+    only returns works published as for-sale so the Buy experience never has
+    to infer purchase status from museum data.
+    """
+
+    name = "Collect24"
+
+    async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
+        if not COLLECT24_API_KEY:
+            return []
+        headers = {
+            "Authorization": f"Bearer {COLLECT24_API_KEY}",
+            "Accept": "application/json",
+        }
+        params = {
+            "q": query,
+            "availability": "for_sale",
+            "limit": min(limit, 100),
+        }
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers) as client:
+            response = await client.get(f"{COLLECT24_BASE_URL}/artworks", params=params)
+            response.raise_for_status()
+            payload = response.json()
+        rows = payload.get("data") or payload.get("results") or []
+        return [self._map(row) for row in rows if isinstance(row, dict)][:limit]
+
+    def _map(self, item: dict[str, Any]) -> Artwork:
+        artist_data = item.get("artist") or {}
+        price_data = item.get("price") or {}
+        dimensions = item.get("dimensions_cm") or {}
+        dimension_parts = []
+        if isinstance(dimensions, dict):
+            for key, label in (("height", "H"), ("width", "W"), ("depth", "D")):
+                value = dimensions.get(key)
+                if isinstance(value, (int, float)):
+                    dimension_parts.append(f"{label} {value:g} cm")
+        image_data = item.get("images") or {}
+        image_url = image_data.get("cover_url") or image_data.get("thumbnail_url") if isinstance(image_data, dict) else None
+        price_value = price_data.get("amount") if isinstance(price_data, dict) else None
+        try:
+            price_value = float(price_value) if price_value is not None else None
+        except (TypeError, ValueError):
+            price_value = None
+        return Artwork(
+            id=f"collect24:{item.get('collect24_id') or item.get('id')}",
+            title=item.get("title") or "Untitled",
+            artist=(artist_data.get("name") if isinstance(artist_data, dict) else None) or "Unknown artist",
+            image_url=image_url,
+            detail_url=(item.get("links") or {}).get("public_page") if isinstance(item.get("links"), dict) else None,
+            source=self.name,
+            source_kind="commercial",
+            availability="available" if item.get("availability") == "for_sale" else "not_for_sale",
+            price=price_value,
+            currency=price_data.get("currency") if isinstance(price_data, dict) else None,
+            medium=item.get("medium"),
+            dimensions=" · ".join(dimension_parts) if dimension_parts else None,
+            year=item.get("year_created"),
+            description=item.get("provenance_summary"),
+        )
+
+
 def _map_artsy(item: dict[str, Any]) -> Artwork:
     artists = item.get("_embedded", {}).get("artists") or []
     artist = artists[0].get("name") if artists else "Unknown artist"
@@ -308,7 +381,7 @@ def _matches_query(work: Artwork, query: str) -> bool:
 
 def commercial_providers() -> list[ArtworkProvider]:
     # Artsy is used only with current partner credentials; Artlogic is feed-based.
-    return [ArtsyProvider(), ArtlogicProvider()]
+    return [ArtsyProvider(), ArtlogicProvider(), Collect24Provider()]
 
 
 def institutional_providers() -> list[ArtworkProvider]:
