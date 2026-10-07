@@ -2,48 +2,55 @@
 {% block title %}ArtCo | Dashboard{% endblock %}
 {% block content %}
 <section class="workspace-page shell dashboard-page">
-  <div class="dashboard-header">
+  <header class="dashboard-header">
     <div>
       <h1>Your ArtCo.</h1>
-      <p class="lede">Return to your conversations, keep track of the art you saved, and shape the taste your concierge uses with you.</p>
+      <p class="lede">Your conversations, saved discoveries, and the taste your concierge has learned with you.</p>
     </div>
     <a class="primary-button" href="/concierge">Ask my concierge <span aria-hidden="true">→</span></a>
+  </header>
+
+  <div class="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
+    <button class="dashboard-tab is-active" id="overviewTab" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" tabindex="0">Overview</button>
+    <button class="dashboard-tab" id="tasteTab" type="button" role="tab" aria-selected="false" aria-controls="tastePanel" tabindex="-1">Your taste</button>
   </div>
 
-  <div class="dashboard-layout">
-    <section class="dashboard-section recent-section" aria-labelledby="recentHeading">
-      <div class="section-heading dashboard-heading">
-        <div>
-          <h2 id="recentHeading">Continue where you left off</h2>
-          <p>Your recent conversations stay here so you can continue without starting over.</p>
+  <section class="dashboard-tab-panel is-active" id="overviewPanel" role="tabpanel" aria-labelledby="overviewTab">
+    <div class="dashboard-overview-grid">
+      <section class="dashboard-section" aria-labelledby="recentHeading">
+        <div class="dashboard-heading">
+          <div>
+            <h2 id="recentHeading">Continue where you left off</h2>
+            <p>Your recent conversations stay here so you can continue without starting over.</p>
+          </div>
         </div>
-      </div>
-      <div id="dashboardRecent" class="recent-list"></div>
-    </section>
+        <div id="dashboardRecent" class="recent-list"></div>
+      </section>
 
-    <section class="dashboard-section saved-section" aria-labelledby="dashboardSavedHeading">
-      <div class="section-heading dashboard-heading">
-        <div>
-          <h2 id="dashboardSavedHeading">Saved art</h2>
-          <p>Works you decided were worth keeping.</p>
+      <section class="dashboard-section" aria-labelledby="dashboardSavedHeading">
+        <div class="dashboard-heading">
+          <div>
+            <h2 id="dashboardSavedHeading">Saved art</h2>
+            <p>Works you decided were worth keeping.</p>
+          </div>
+          <a class="section-link" href="/saved">View all saved art</a>
         </div>
-        <a class="section-link" href="/saved">View all</a>
-      </div>
-      <div id="dashboardSaved" class="saved-preview dashboard-saved-preview"></div>
-      <p id="dashboardSavedEmpty" class="empty-state" hidden>You haven't saved any works yet.</p>
-    </section>
-  </div>
-
-  <section class="dashboard-profile" id="taste" aria-labelledby="dashboardTasteHeading">
-    <div class="dashboard-profile-header">
-      <div>
-        <h2 id="dashboardTasteHeading">Your taste</h2>
-        <p>Your concierge carries these preferences into future conversations. Update them here whenever your taste changes.</p>
-      </div>
-      <button class="secondary-button" id="dashboardAskButton" type="button">Use this in a request</button>
+        <div id="dashboardSaved" class="saved-preview dashboard-saved-preview"></div>
+        <p id="dashboardSavedEmpty" class="empty-state" hidden>You haven't saved any works yet.</p>
+      </section>
     </div>
+  </section>
 
-    <div class="dashboard-profile-grid">
+  <section class="dashboard-tab-panel" id="tastePanel" role="tabpanel" aria-labelledby="tasteTab" hidden>
+    <header class="taste-panel-header">
+      <div>
+        <h2>Your taste</h2>
+        <p>ArtCo carries these preferences into future conversations. Change them whenever your interests change.</p>
+      </div>
+      <button class="primary-button" id="saveTaste" type="button">Save my taste</button>
+    </header>
+
+    <div class="taste-editor-grid">
       <section class="taste-profile-column" aria-labelledby="dashboardLoveHeading">
         <h3 id="dashboardLoveHeading">Things you love</h3>
         <p class="taste-help">Artists, music, films, places, design, books, brands, or anything else that speaks to you.</p>
@@ -56,7 +63,7 @@
 
       <section class="taste-profile-column" aria-labelledby="dashboardAvoidHeading">
         <h3 id="dashboardAvoidHeading">Things to avoid</h3>
-        <p class="taste-help">Tell your concierge about artists, styles, subjects, or directions you would rather not see.</p>
+        <p class="taste-help">Artists, styles, subjects, or directions you would rather not see.</p>
         <div class="reference-entry">
           <div id="avoidChips" class="chips" aria-live="polite"></div>
           <label class="sr-only" for="avoidInput">Add something to avoid</label>
@@ -65,25 +72,21 @@
       </section>
     </div>
 
-    <div class="dashboard-profile-lower">
+    <div class="taste-editor-lower">
       <div>
         <label class="field-label" for="tasteNotes">Anything else I should know</label>
         <textarea id="tasteNotes" rows="8" placeholder="Tell your concierge about the kinds of experiences you enjoy, things you avoid, or how you want to explore."></textarea>
       </div>
-
-      <div class="dashboard-discovery">
+      <div class="discovery-control">
         <label class="field-label" for="discoveryLevel">How adventurous should I be?</label>
-        <p>Keep the search close to what you already like, or let your concierge take you further away from the familiar.</p>
+        <p class="discovery-copy">Keep the search close to what you already like, or let your concierge take you further from the familiar.</p>
         <div class="range-line">
           <span>Familiar</span>
           <input id="discoveryLevel" type="range" min="0" max="100" step="1" value="50" aria-describedby="dashboardDiscoveryHelp">
           <span id="discoveryValue" aria-live="polite">50%</span>
         </div>
         <p id="dashboardDiscoveryHelp" class="sr-only">0 is familiar and 100 is highly adventurous.</p>
-        <div class="taste-save-row">
-          <button class="primary-button" id="saveTaste" type="button">Save my taste</button>
-          <span id="tasteUpdated" class="field-note" aria-live="polite">Not yet saved</span>
-        </div>
+        <p id="tasteUpdated" class="field-note" aria-live="polite">Not yet saved</p>
       </div>
     </div>
   </section>

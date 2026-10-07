@@ -6,7 +6,7 @@
     last: 'artCoLastResult',
     stateVersion: 'artCoStateVersion',
   };
-  const STATE_VERSION = 2;
+  const STATE_VERSION = 3;
 
   const readJson = (key, fallback) => {
     try {
@@ -146,7 +146,6 @@
     const recent = $('#dashboardRecent');
     const saved = $('#dashboardSaved');
     const savedEmpty = $('#dashboardSavedEmpty');
-    const tasteChips = $('#dashboardTasteChips');
     if (!recent && !saved) return;
 
     if (recent) {
@@ -167,25 +166,38 @@
       if (savedEmpty) savedEmpty.hidden = works.length > 0;
     }
 
-    if (tasteChips) {
-      tasteChips.innerHTML = state.profile.loves.slice(0, 8).map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
-    }
-    const tasteCopy = $('#dashboardTasteCopy');
-    if (tasteCopy && state.profile.loves.length) {
-      tasteCopy.textContent = `${state.profile.loves.length} reference${state.profile.loves.length === 1 ? '' : 's'} saved. Your concierge can use them in future searches.`;
-    }
+    renderTastePage();
+
+    const overviewTab = $('#overviewTab');
+    const tasteTab = $('#tasteTab');
+    const overviewPanel = $('#overviewPanel');
+    const tastePanel = $('#tastePanel');
+    const activateTab = (tabName, moveFocus = false) => {
+      const isTaste = tabName === 'taste';
+      overviewTab?.classList.toggle('is-active', !isTaste);
+      tasteTab?.classList.toggle('is-active', isTaste);
+      overviewTab?.setAttribute('aria-selected', String(!isTaste));
+      tasteTab?.setAttribute('aria-selected', String(isTaste));
+      overviewTab?.setAttribute('tabindex', isTaste ? '-1' : '0');
+      tasteTab?.setAttribute('tabindex', isTaste ? '0' : '-1');
+      if (overviewPanel) { overviewPanel.hidden = isTaste; overviewPanel.classList.toggle('is-active', !isTaste); }
+      if (tastePanel) { tastePanel.hidden = !isTaste; tastePanel.classList.toggle('is-active', isTaste); }
+      if (moveFocus) (isTaste ? tasteTab : overviewTab)?.focus();
+    };
+    overviewTab?.addEventListener('click', () => activateTab('overview'));
+    tasteTab?.addEventListener('click', () => activateTab('taste'));
+    [overviewTab, tasteTab].forEach((tab) => tab?.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); activateTab(tab === overviewTab ? 'taste' : 'overview', true); }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); activateTab(tab === overviewTab ? 'taste' : 'overview', true); }
+      if (event.key === 'Home') { event.preventDefault(); activateTab('overview', true); }
+      if (event.key === 'End') { event.preventDefault(); activateTab('taste', true); }
+    }));
+    const hash = window.location.hash.toLowerCase();
+    activateTab(hash === '#taste' ? 'taste' : 'overview');
   }
 
   function renderHome() {
     // The landing page is intentionally focused on the product proposition and primary CTA.
-  }
-
-  function renderTasteInConcierge() {
-    const wrap = $('#savedTaste');
-    const empty = $('#savedTasteEmpty');
-    if (!wrap || !empty) return;
-    wrap.innerHTML = state.profile.loves.map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
-    empty.hidden = state.profile.loves.length > 0;
   }
 
   function intentCopy(intent) {
@@ -202,12 +214,10 @@
   function setIntent(intent) {
     state.intent = intent;
     const [title, lede] = intentCopy(intent);
-    $('#conciergeTitle').textContent = title;
-    $('#conciergeLede').textContent = lede;
-    $$('#intentList button').forEach((button) => {
-      if (button.dataset.intent === intent) button.setAttribute('aria-current', 'true');
-      else button.removeAttribute('aria-current');
-    });
+    const titleNode = $('#conciergeTitle');
+    const ledeNode = $('#conciergeLede');
+    if (titleNode) titleNode.textContent = title;
+    if (ledeNode) ledeNode.textContent = lede;
   }
 
   function addProfileReference(value) {
@@ -281,9 +291,11 @@
   function beginRequest(prompt) {
     const clean = String(prompt || '').trim();
     if (!clean) return;
-    const inferred = state.intent && new URLSearchParams(window.location.search).has('intent') ? state.intent : inferIntent(clean);
+    const params = new URLSearchParams(window.location.search);
+    const inferred = params.has('intent') ? state.intent : inferIntent(clean);
+    const request = buildRequest(clean, null, inferred);
+    sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
     window.location.href = `/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`;
-    sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(buildRequest(clean, null, inferred)));
   }
 
   async function runPendingRequest() {
@@ -563,7 +575,9 @@
 
   function initConcierge() {
     setIntent(state.intent);
-    renderTasteInConcierge();
+    const serviceSelect = $('#serviceSelect');
+    if (serviceSelect) serviceSelect.value = state.intent;
+
     const resume = new URLSearchParams(window.location.search).get('resume');
     if (resume === '1') {
       try {
@@ -579,11 +593,21 @@
         localStorage.removeItem('artCoResumeRequest');
       } catch {}
     }
+
+    serviceSelect?.addEventListener('change', (event) => {
+      const intent = event.target.value || 'discover';
+      state.intent = intent;
+      setIntent(intent);
+      const url = new URL(window.location.href);
+      url.searchParams.set('intent', intent);
+      window.history.replaceState({}, '', url.toString());
+    });
+
     const form = $('#requestForm');
     const input = $('#requestInput');
     form?.addEventListener('submit', (event) => {
       event.preventDefault();
-      beginRequest(input.value);
+      beginRequest(input?.value || '');
     });
     input?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -591,30 +615,7 @@
         beginRequest(input.value);
       }
     });
-    const starterPrompts = {
-      discover: 'Help me discover art connected to the things I love, but take me somewhere I would not find on my own.',
-      find: 'Help me find a specific artwork. I will tell you the style, subject, medium, or setting I have in mind.',
-      taste: 'Help me develop my art taste by showing me different directions and learning from what I respond to.',
-      curate: 'Help me curate several artworks that belong together around a space, idea, or mood.',
-      buy: 'Help me find art I can actually buy within my budget and tell me where I can purchase it.',
-      learn: 'Help me learn about an artist, artwork, movement, or idea through relevant works and context.'
-    };
-
-    $$('#intentList button').forEach((button) => button.addEventListener('click', () => {
-      const intent = button.dataset.intent || 'discover';
-      setIntent(intent);
-      const input = $('#requestInput');
-      if (input) {
-        input.value = starterPrompts[intent] || '';
-        input.focus();
-        input.setSelectionRange(0, 0);
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.set('intent', intent);
-      window.history.replaceState({}, '', url.toString());
-    }));
   }
-
   function initResults() {
     if (state.last) renderResults(state.last);
     const params = new URLSearchParams(window.location.search);
@@ -686,9 +687,6 @@
         button.textContent = 'Saved';
         window.setTimeout(() => { button.textContent = 'Save my taste'; }, 1400);
       }
-    });
-    $('#dashboardAskButton')?.addEventListener('click', () => {
-      window.location.href = '/concierge';
     });
   }
 

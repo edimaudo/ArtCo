@@ -31,12 +31,12 @@ async def search_entities(query: str) -> list[dict[str, Any]]:
     if not QLOO_API_KEY or not query.strip():
         return []
 
-    params = {
-        "query": query.strip(),
-        "types": ",".join(SEARCH_TYPES),
-        "take": str(QLOO_SEARCH_LIMIT),
-        "sort_by": "match",
-    }
+    params = [
+        ("query", query.strip()),
+        *[("types", entity_type) for entity_type in SEARCH_TYPES],
+        ("take", QLOO_SEARCH_LIMIT),
+        ("sort_by", "match"),
+    ]
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         response = await client.get(
