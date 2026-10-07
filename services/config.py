@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-QLOO_BASE_URL = os.getenv("QLOO_BASE_URL", "https://hackathon.api.qloo.com")
+QLOO_BASE_URL = "https://hackathon.api.qloo.com"
 QLOO_API_KEY = os.getenv("QLOO_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")

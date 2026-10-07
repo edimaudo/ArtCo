@@ -9,6 +9,7 @@ from .art_sources import Artwork, commercial_providers, institutional_providers
 from .llm import CandidateReview, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
+from . import config
 
 
 async def _resolve_entities(
@@ -34,17 +35,23 @@ async def _resolve_entities(
     if not queries and request.goal:
         queries = [request.goal[:160]]
 
-    async def resolve(query: str) -> tuple[str, list[dict[str, Any]]]:
+    async def resolve(query: str) -> tuple[str, list[dict[str, Any]], str | None]:
         try:
-            return query, await search_entities(query)
-        except Exception:
-            return query, []
+            return query, await search_entities(query), None
+        except Exception as exc:
+            return query, [], str(exc)
+
 
     results = await asyncio.gather(*(resolve(query) for query in queries)) if queries else []
     resolved: list[dict[str, Any]] = []
-    for query, matches in results:
+    errors: list[str] = []
+    for query, matches, error in results:
+        if error:
+            errors.append(error)
         if matches:
             resolved.append({"query": query, "match": matches[0]})
+    if errors:
+        status.append({"label": "Cultural discovery service unavailable", "state": "warning", "detail": errors[0][:240]})
 
     status[-1]["state"] = "done"
     return resolved
@@ -64,8 +71,9 @@ async def _qloo_taste(
     ]
     try:
         artists = await get_artist_insights(entity_ids[:8], request.discovery_level)
-    except Exception:
+    except Exception as exc:
         artists = []
+        status.append({"label": "Related-art discovery unavailable", "state": "warning", "detail": str(exc)[:240]})
     status[-1]["state"] = "done"
     return artists
 
@@ -383,6 +391,20 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     return {
         "success": True,
         "intent": request.intent.value,
+        "diagnostics": {
+            "qloo_configured": bool(config.QLOO_API_KEY),
+            "qloo_base_url": config.QLOO_BASE_URL,
+            "gemini_configured": bool(config.GEMINI_API_KEY),
+            "commercial_sources_configured": [
+                name for name, configured in [
+                    ("Artsy", bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)),
+                    ("Artlogic", bool(config.ARTLOGIC_FEED_URL)),
+                    ("Collect24", bool(config.COLLECT24_API_KEY)),
+                ] if configured
+            ],
+            "purchase_inventory_found": len(purchasable),
+            "institutional_works_found": sum(work.source_kind == "institution" for work in works),
+        },
         "summary": intent_summary,
         "brief": {
             "intent": request.intent.value,

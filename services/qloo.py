@@ -31,9 +31,12 @@ async def search_entities(query: str) -> list[dict[str, Any]]:
     if not QLOO_API_KEY or not query.strip():
         return []
 
-    params: list[tuple[str, str]] = [("query", query.strip())]
-    params.extend(("types", entity_type) for entity_type in SEARCH_TYPES)
-    params.extend([("take", str(QLOO_SEARCH_LIMIT)), ("sort_by", "match")])
+    params = {
+        "query": query.strip(),
+        "types": ",".join(SEARCH_TYPES),
+        "take": str(QLOO_SEARCH_LIMIT),
+        "sort_by": "match",
+    }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         response = await client.get(
@@ -41,7 +44,8 @@ async def search_entities(query: str) -> list[dict[str, Any]]:
             headers=_headers(),
             params=params,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(f"Qloo entity search failed ({response.status_code}): {response.text[:300]}")
         return _extract_entities(response.json())
 
 
@@ -55,15 +59,15 @@ async def get_artist_insights(
 
     trend_bias = "low" if discovery_level < 35 else "medium" if discovery_level < 70 else "high"
     cross_domain = 6 if discovery_level < 35 else 12 if discovery_level < 70 else 20
-    params: list[tuple[str, str]] = [
-        ("filter.type", "urn:entity:artist"),
-        ("signal.interests.entities", ",".join(entity_ids[:8])),
-        ("signal.interests.entities.weight", "1"),
-        ("take", str(QLOO_ARTIST_TAKE)),
-        ("bias.trends", trend_bias),
-        ("backfill.cross_domain.take", str(cross_domain)),
-        ("feature.explainability", "true"),
-    ]
+    params = {
+        "filter.type": "urn:entity:artist",
+        "signal.interests.entities": ",".join(entity_ids[:8]),
+        "signal.interests.entities.weight": "1",
+        "take": str(QLOO_ARTIST_TAKE),
+        "bias.trends": trend_bias,
+        "backfill.cross_domain.take": str(cross_domain),
+        "feature.explainability": "true",
+    }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         response = await client.get(
@@ -71,7 +75,8 @@ async def get_artist_insights(
             headers=_headers(),
             params=params,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(f"Qloo artist insights failed ({response.status_code}): {response.text[:300]}")
         return _extract_entities(response.json())
 
 

@@ -16,8 +16,8 @@
     <a class="brand" href="{% if page == 'home' %}/{% else %}/dashboard{% endif %}" aria-label="{% if page == 'home' %}ArtCo home{% else %}ArtCo dashboard{% endif %}">ArtCo</a>
     {% if page != 'home' %}
     <nav class="primary-nav" aria-label="Primary navigation">
+      <a href="/dashboard" data-page="dashboard">Dashboard</a>
       <a href="/concierge" data-page="concierge">Concierge</a>
-      <a href="/taste" data-page="taste">My Taste</a>
       <a href="/saved" data-page="saved">Saved</a>
     </nav>
     {% endif %}

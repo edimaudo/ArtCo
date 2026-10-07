@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -48,9 +48,9 @@ async def saved_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="saved.html", context={"page": "saved"})
 
 
-@app.get("/taste", response_class=HTMLResponse)
-async def taste_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="taste.html", context={"page": "taste"})
+@app.get("/taste")
+async def taste_page(request: Request) -> RedirectResponse:
+    return RedirectResponse(url="/dashboard#taste", status_code=307)
 
 
 @app.get("/checkout/success", response_class=HTMLResponse)
@@ -101,6 +101,29 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.get("/api/diagnostics")
+async def diagnostics() -> dict[str, Any]:
+    from services import config
+    return {
+        "qloo": {
+            "configured": bool(config.QLOO_API_KEY),
+            "base_url": config.QLOO_BASE_URL,
+            "hackathon_environment": config.QLOO_BASE_URL == "https://hackathon.api.qloo.com",
+        },
+        "gemini": {
+            "configured": bool(config.GEMINI_API_KEY),
+            "model": config.GEMINI_MODEL,
+        },
+        "commercial_sources": {
+            "artsy": bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID),
+            "artlogic": bool(config.ARTLOGIC_FEED_URL),
+            "collect24": bool(config.COLLECT24_API_KEY),
+        },
+        "stripe": {
+            "configured": bool(config.STRIPE_SECRET_KEY),
+        },
+    }
 
 
 @app.post("/api/concierge")

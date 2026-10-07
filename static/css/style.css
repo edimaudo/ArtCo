@@ -478,3 +478,136 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .checkout-status { max-width: 720px; padding-top: 22px; }
 .checkout-status .lede { max-width: 650px; }
 .checkout-actions { display: flex; gap: 10px; margin-top: 30px; flex-wrap: wrap; }
+
+
+/* ArtCo accessibility and workspace corrections */
+.primary-nav a {
+  min-width: 104px;
+  justify-content: center;
+  font-size: .95rem;
+}
+
+.dashboard-profile {
+  margin-top: 72px;
+  padding-top: 36px;
+  border-top: 1px solid var(--line);
+}
+.dashboard-profile-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 32px;
+  align-items: end;
+}
+.dashboard-profile-header > div > p,
+.taste-help,
+.dashboard-discovery > p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 720px;
+}
+.dashboard-profile-grid {
+  margin-top: 44px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 64px;
+}
+.taste-profile-column h3 {
+  font-size: 1.2rem;
+}
+.taste-help {
+  margin-top: 10px;
+  font-size: .98rem;
+  max-width: 540px;
+}
+.dashboard-profile .reference-entry {
+  margin-top: 26px;
+  min-height: 62px;
+}
+.dashboard-profile #tasteInput,
+.dashboard-profile #avoidInput {
+  font-size: 1rem;
+  min-height: 46px;
+}
+.dashboard-profile .field-label {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 1rem;
+}
+.dashboard-profile-lower {
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, .65fr);
+  gap: 56px;
+  align-items: start;
+}
+.dashboard-profile-lower textarea {
+  width: 100%;
+  min-height: 220px;
+  padding: 17px 18px;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.dashboard-discovery {
+  padding-top: 2px;
+}
+.dashboard-discovery > p {
+  font-size: .98rem;
+  max-width: 460px;
+}
+.dashboard-profile .range-line {
+  margin-top: 20px;
+  font-size: .92rem;
+}
+.dashboard-profile .taste-save-row {
+  margin-top: 24px;
+}
+
+.context-empty {
+  font-size: .96rem;
+  line-height: 1.6;
+}
+.chip {
+  font-size: .92rem;
+  min-height: 40px;
+}
+.chip button {
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 1rem;
+}
+
+.intent-grid button {
+  min-height: 104px;
+  padding: 20px;
+}
+.intent-grid strong {
+  font-size: 1rem;
+}
+.intent-grid span {
+  font-size: .9rem;
+  line-height: 1.5;
+}
+
+.request-composer textarea {
+  min-height: 200px;
+  font-size: 1rem;
+}
+.request-composer > label {
+  font-size: 1rem;
+}
+#requestHint {
+  font-size: .9rem;
+}
+
+@media (max-width: 860px) {
+  .dashboard-profile-header,
+  .dashboard-profile-grid,
+  .dashboard-profile-lower {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-profile-grid {
+    gap: 42px;
+  }
+}

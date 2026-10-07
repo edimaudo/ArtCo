@@ -1,75 +1,13 @@
 {% extends "base.html" %}
-{% block title %}ArtCo | My Taste{% endblock %}
+{% block title %}ArtCo | Your taste{% endblock %}
 {% block content %}
-<section class="workspace-page shell taste-page">
-  <header class="workspace-header taste-header">
+<section class="workspace-page shell">
+  <div class="workspace-header">
     <div>
-      <h1>Your taste, over time.</h1>
-      <p class="lede">Keep the references that help your concierge understand what you love, what you avoid, and how far you want to explore.</p>
+      <h1>Your taste is part of your ArtCo dashboard.</h1>
+      <p class="lede">Manage the preferences your concierge carries between conversations from your dashboard.</p>
     </div>
-    <a class="primary-button" href="/concierge">Ask my concierge <span aria-hidden="true">→</span></a>
-  </header>
-
-  <div class="taste-workspace">
-    <section class="taste-editor" aria-labelledby="tasteReferencesHeading">
-      <div class="taste-section-heading">
-        <h2 id="tasteReferencesHeading">Things you love</h2>
-        <p>Artists, music, films, places, design, books, brands, or anything else that speaks to you.</p>
-      </div>
-      <div class="reference-entry">
-        <div id="tasteChips" class="chips" aria-live="polite"></div>
-        <label class="sr-only" for="tasteInput">Add something you love</label>
-        <input id="tasteInput" type="text" placeholder="Add an artist, film, designer, place, brand…" aria-label="Add something you love">
-      </div>
-      <p class="field-note">Press Enter to add another reference.</p>
-
-      <div class="taste-section-block">
-        <div class="taste-section-heading">
-          <h2>Things to avoid</h2>
-          <p>Tell your concierge about artists, styles, or directions you would rather not see.</p>
-        </div>
-        <div class="reference-entry">
-          <div id="avoidChips" class="chips" aria-live="polite"></div>
-          <label class="sr-only" for="avoidInput">Add something to avoid</label>
-          <input id="avoidInput" type="text" placeholder="Add an artist, style, subject…" aria-label="Add something to avoid">
-        </div>
-        <p class="field-note">Press Enter to add another item.</p>
-      </div>
-
-      <div class="taste-notes">
-        <label class="field-label" for="tasteNotes">Anything else I should know</label>
-        <textarea id="tasteNotes" rows="7" placeholder="Tell your concierge about the kinds of experiences you enjoy, things you avoid, or how you want to explore."></textarea>
-      </div>
-
-      <div class="discovery-control">
-        <div class="discovery-copy">
-          <label class="field-label" for="discoveryLevel">How adventurous should I be?</label>
-          <p>Keep this close to what you already like, or let your concierge take you further away from the familiar.</p>
-        </div>
-        <div class="range-line">
-          <span>Familiar</span>
-          <input id="discoveryLevel" type="range" min="0" max="100" step="1" value="50" aria-describedby="discoveryHelp">
-          <span id="discoveryValue" aria-live="polite">50%</span>
-        </div>
-        <p id="discoveryHelp" class="sr-only">0 is familiar and 100 is highly adventurous.</p>
-      </div>
-
-      <div class="taste-save-row">
-        <button class="primary-button" id="saveTaste" type="button">Save my taste</button>
-        <span id="tasteUpdated" class="field-note" aria-live="polite">Not yet saved</span>
-      </div>
-    </section>
-
-    <aside class="taste-side taste-profile-card" aria-labelledby="tasteProfileHeading">
-      <div>
-        <h2 id="tasteProfileHeading">Your concierge profile</h2>
-        <p>Your saved references are carried into future conversations so you don't have to repeat yourself every time.</p>
-      </div>
-      <div class="taste-profile-actions">
-        <a class="secondary-button" href="/concierge">Start a request</a>
-        <a class="secondary-button" href="/dashboard">Back to dashboard</a>
-      </div>
-    </aside>
+    <a class="primary-button" href="/dashboard#taste">Open your taste</a>
   </div>
 </section>
 {% endblock %}

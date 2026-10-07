@@ -351,6 +351,7 @@
     const image = work.image_url
       ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
       : '<div class="art-placeholder">Image unavailable</div>';
+    const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
     const externalLink = work.detail_url
       ? `<a class="card-action" href="${escapeAttribute(work.detail_url)}" target="_blank" rel="noopener noreferrer">${linkLabel} →</a>`
@@ -361,7 +362,6 @@
     const link = available && work.checkout_available ? `${checkoutButton}${externalLink}` : externalLink;
     const saved = state.saved.some((item) => item.id === work.id);
     const reasons = (work.why || []).map((item) => String(item)).join(' · ');
-    const id = escapeAttribute(work.id);
     return `
       <article class="art-card" data-art-id="${id}">
         <div class="art-image-wrap">${image}</div>
@@ -398,9 +398,21 @@
       ? (available ? `${available} purchase option${available === 1 ? '' : 's'} found` : 'No purchase inventory found')
       : `${data.total_found || 0} works researched`;
     const results = data.results || [];
-    $('#artGrid').innerHTML = results.length
-      ? results.map(renderCard).join('')
-      : `<p class="empty-state">${escapeHtml(intent === 'buy' ? 'I could not find purchase inventory in the connected commercial sources.' : 'I could not find strong matches. Refine the request and I’ll search again.')}</p>`;
+    if (results.length) {
+      $('#artGrid').innerHTML = results.map(renderCard).join('');
+    } else {
+      const diagnostic = data.diagnostics || {};
+      const commercialConfigured = (diagnostic.commercial_sources_configured || []).length > 0;
+      let emptyMessage = intent === 'buy'
+        ? (commercialConfigured
+          ? 'I could not find purchase inventory in the connected commercial sources.'
+          : 'No commercial art source is connected yet. Connect an acquisition source to search art available to buy.')
+        : 'I could not find strong matches. Refine the request and I’ll search again.';
+      if (!commercialConfigured && intent !== 'buy' && diagnostic.gemini_configured !== false) {
+        emptyMessage += ' The artwork sources did not return usable results for this search.';
+      }
+      $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
+    }
 
     const notForSale = data.not_for_sale || [];
     $('#notForSaleSection').hidden = !notForSale.length;
@@ -544,7 +556,10 @@
   }
 
   function initHome() { renderHome(); }
-  function initDashboard() { renderDashboard(); }
+  function initDashboard() {
+    renderDashboard();
+    initTasteEditor();
+  }
 
   function initConcierge() {
     setIntent(state.intent);
@@ -576,10 +591,27 @@
         beginRequest(input.value);
       }
     });
+    const starterPrompts = {
+      discover: 'Help me discover art connected to the things I love, but take me somewhere I would not find on my own.',
+      find: 'Help me find a specific artwork. I will tell you the style, subject, medium, or setting I have in mind.',
+      taste: 'Help me develop my art taste by showing me different directions and learning from what I respond to.',
+      curate: 'Help me curate several artworks that belong together around a space, idea, or mood.',
+      buy: 'Help me find art I can actually buy within my budget and tell me where I can purchase it.',
+      learn: 'Help me learn about an artist, artwork, movement, or idea through relevant works and context.'
+    };
+
     $$('#intentList button').forEach((button) => button.addEventListener('click', () => {
-      const url = new URL('/concierge', window.location.origin);
-      url.searchParams.set('intent', button.dataset.intent);
-      window.location.href = url.toString();
+      const intent = button.dataset.intent || 'discover';
+      setIntent(intent);
+      const input = $('#requestInput');
+      if (input) {
+        input.value = starterPrompts[intent] || '';
+        input.focus();
+        input.setSelectionRange(0, 0);
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('intent', intent);
+      window.history.replaceState({}, '', url.toString());
     }));
   }
 
@@ -604,7 +636,7 @@
 
   function initSaved() { renderSavedPage(); }
 
-  function initTaste() {
+  function initTasteEditor() {
     renderTastePage();
     $('#tasteInput')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ',') {
@@ -650,10 +682,20 @@
       saveProfile();
       renderTastePage();
       const button = $('#saveTaste');
-      button.textContent = 'Saved';
-      window.setTimeout(() => { button.textContent = 'Save my taste'; }, 1400);
+      if (button) {
+        button.textContent = 'Saved';
+        window.setTimeout(() => { button.textContent = 'Save my taste'; }, 1400);
+      }
+    });
+    $('#dashboardAskButton')?.addEventListener('click', () => {
+      window.location.href = '/concierge';
     });
   }
+
+  function initTaste() {
+    window.location.href = '/dashboard#taste';
+  }
+
 
   applyThemeControls();
   setupGlobalControls();
