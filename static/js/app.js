@@ -290,22 +290,41 @@
 
   function beginRequest(prompt) {
     const clean = String(prompt || '').trim();
-    if (!clean) return;
+    if (!clean) {
+      const input = $('#requestInput');
+      if (input) {
+        input.setCustomValidity('Tell your concierge what you would like help with.');
+        input.reportValidity();
+        input.focus();
+      }
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     const inferred = params.has('intent') ? state.intent : inferIntent(clean);
     const request = buildRequest(clean, null, inferred);
-    sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
-    window.location.href = `/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`;
+    const serialized = JSON.stringify(request);
+    // Write before navigation. Session storage is preferred; local storage is
+    // a guarded fallback for browser contexts where sessionStorage is blocked.
+    try {
+      sessionStorage.setItem('artConciergePendingRequest', serialized);
+      localStorage.removeItem('artConciergePendingRequest');
+    } catch (error) {
+      localStorage.setItem('artConciergePendingRequest', serialized);
+    }
+    window.location.assign(`/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`);
   }
 
   async function runPendingRequest() {
-    const raw = sessionStorage.getItem('artConciergePendingRequest');
-    if (!raw) return false;
-    sessionStorage.removeItem('artConciergePendingRequest');
-    let payload;
-    try { payload = JSON.parse(raw); } catch { return false; }
     const resultsPage = $('#resultsPage');
     if (!resultsPage) return false;
+    const raw = sessionStorage.getItem('artConciergePendingRequest') || localStorage.getItem('artConciergePendingRequest');
+    if (!raw) return false;
+    let payload;
+    try { payload = JSON.parse(raw); } catch { return false; }
+    // Consume only after the results page and request payload are valid. This avoids
+    // losing a user's brief if navigation lands on a stale or incorrect template.
+    sessionStorage.removeItem('artConciergePendingRequest');
+    localStorage.removeItem('artConciergePendingRequest');
 
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
@@ -419,9 +438,12 @@
         ? (commercialConfigured
           ? 'I could not find purchase inventory in the connected commercial sources.'
           : 'No commercial art source is connected yet. Connect an acquisition source to search art available to buy.')
-        : 'I could not find strong matches. Refine the request and I’ll search again.';
-      if (!commercialConfigured && intent !== 'buy' && diagnostic.gemini_configured !== false) {
-        emptyMessage += ' The artwork sources did not return usable results for this search.';
+        : 'The connected art collections did not return a match for that wording. Try a broader art style, artist, subject, or medium.';
+      const failedSources = (diagnostic.source_diagnostics || [])
+        .filter((source) => source.configured && (source.errors || []).length)
+        .map((source) => `${source.provider} (${source.errors[0]})`);
+      if (failedSources.length) {
+        emptyMessage += ` Sources with connection issues: ${failedSources.join(', ')}.`;
       }
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }

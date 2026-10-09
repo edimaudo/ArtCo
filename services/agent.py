@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from typing import Any
 
@@ -11,6 +12,8 @@ from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
 
+logger = logging.getLogger(__name__)
+
 
 async def _resolve_entities(
     request: ConciergeRequest,
@@ -18,7 +21,8 @@ async def _resolve_entities(
     signals: Any,
 ) -> list[dict[str, Any]]:
     """Resolve both saved taste references and important references in the current request."""
-    status.append({"label": "Understanding what matters to you", "state": "active"})
+    progress = {"label": "Understanding what matters to you", "state": "active"}
+    status.append(progress)
     queries = list(
         dict.fromkeys(
             [
@@ -50,10 +54,12 @@ async def _resolve_entities(
             errors.append(error)
         if matches:
             resolved.append({"query": query, "match": matches[0]})
+    progress["state"] = "done"
     if errors:
-        status.append({"label": "Cultural discovery service unavailable", "state": "warning", "detail": errors[0][:240]})
-
-    status[-1]["state"] = "done"
+        logger.warning("Qloo entity resolution failed for %d queries; first error: %s", len(errors), errors[0])
+        status.append({"label": "Cultural discovery service unavailable", "state": "warning", "detail": errors[0][:160]})
+    elif not config.QLOO_API_KEY:
+        status.append({"label": "Cultural discovery service not configured", "state": "warning"})
     return resolved
 
 
@@ -63,7 +69,8 @@ async def _qloo_taste(
     status: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
     """Use Qloo to expand cultural references into related artists."""
-    status.append({"label": "Connecting your tastes to art", "state": "active"})
+    progress = {"label": "Connecting your tastes to art", "state": "active"}
+    status.append(progress)
     entity_ids = [
         item["match"].get("id")
         for item in resolved
@@ -73,8 +80,11 @@ async def _qloo_taste(
         artists = await get_artist_insights(entity_ids[:8], request.discovery_level)
     except Exception as exc:
         artists = []
-        status.append({"label": "Related-art discovery unavailable", "state": "warning", "detail": str(exc)[:240]})
-    status[-1]["state"] = "done"
+        logger.warning("Qloo Insights failed (%s)", type(exc).__name__)
+        progress["state"] = "warning"
+        progress["detail"] = str(exc)[:160]
+        return artists
+    progress["state"] = "done"
     return artists
 
 
@@ -84,7 +94,8 @@ async def _build_search_plan(
     qloo_artists: list[dict[str, Any]],
     status: list[dict[str, str]],
 ) -> list[str]:
-    status.append({"label": "Working out where to search", "state": "active"})
+    progress = {"label": "Working out where to search", "state": "active"}
+    status.append(progress)
     try:
         plan = await plan_art_searches(
             request.intent.value,
@@ -100,10 +111,29 @@ async def _build_search_plan(
             preferred_market=request.preferred_market or signals.market,
         )
         directions = plan.queries
-    except Exception:
+    except Exception as exc:
+        logger.warning("Search planning failed (%s); deterministic planning will be used", type(exc).__name__)
         directions = []
-    status[-1]["state"] = "done"
-    return directions
+        progress["state"] = "warning"
+        progress["detail"] = "Using a general art-search plan."
+    else:
+        progress["state"] = "done"
+
+    # Never let a missing/invalid model response turn a valid concierge request
+    # into zero artwork-provider calls. Add broad catalogue-friendly directions
+    # even when the cultural profile is sparse or Qloo/Gemini returns no data.
+    fallback_by_intent = {
+        "buy": ["contemporary art for sale", "original contemporary painting", "limited edition art print"],
+        "curate": ["contemporary painting", "art photography", "modern sculpture"],
+        "taste": ["contemporary painting", "abstract art", "figurative art"],
+        "learn": ["art history", "modern art", "contemporary art"],
+    }
+    fallbacks = fallback_by_intent.get(
+        request.intent.value,
+        ["contemporary art", "modern painting", "contemporary photography"],
+    )
+    combined = list(dict.fromkeys([*(directions or []), *fallbacks]))
+    return [item.strip() for item in combined if isinstance(item, str) and item.strip()][:8]
 
 
 def _apply_signal_overrides(request: ConciergeRequest, signals: Any) -> ConciergeRequest:
@@ -177,20 +207,43 @@ def _deterministic_score(
     return score
 
 
-async def _search_provider(provider: Any, direction: str, limit: int) -> list[Artwork]:
+def _provider_configured(provider: Any) -> bool:
+    if provider.name == "Artsy":
+        return bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)
+    if provider.name == "Artlogic":
+        return bool(config.ARTLOGIC_FEED_URL)
+    if provider.name == "Collect24":
+        return bool(config.COLLECT24_API_KEY)
+    # Institutional collection APIs do not require application credentials.
+    return True
+
+
+def _safe_provider_error(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None:
+        return f"HTTP {status_code}"
+    if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        return "Request timed out"
+    return type(exc).__name__
+
+
+async def _search_provider(provider: Any, direction: str, limit: int) -> tuple[str, str, list[Artwork], str | None]:
     try:
         works = await provider.search(direction, limit=limit)
-        return [replace(work, matched_direction=direction) for work in works]
-    except Exception:
-        return []
+        return provider.name, direction, [replace(work, matched_direction=direction) for work in works], None
+    except Exception as exc:
+        logger.exception("Artwork provider %s failed while searching direction %r", provider.name, direction)
+        return provider.name, direction, [], _safe_provider_error(exc)
 
 
 async def _research(
     directions: list[str],
     request: ConciergeRequest,
     status: list[dict[str, str]],
-) -> list[Artwork]:
-    status.append({"label": "Researching artwork sources", "state": "active"})
+) -> tuple[list[Artwork], list[dict[str, Any]]]:
+    progress = {"label": "Researching artwork sources", "state": "active"}
+    status.append(progress)
     commercial = commercial_providers()
     institutional = institutional_providers()
 
@@ -201,24 +254,74 @@ async def _research(
     else:
         provider_groups = [institutional, commercial]
 
-    search_directions = list(dict.fromkeys(directions))[:5]
+    # Use a bounded mix of specific and broad terms. Cultural items such as a
+    # favourite musician are useful signals for Qloo, but often return no rows
+    # when sent verbatim to a museum artwork catalogue. Always reserve searches
+    # for broad visual-art categories so source coverage does not collapse.
+    fallback_by_intent = {
+        "buy": ["contemporary art for sale", "original contemporary painting"],
+        "curate": ["contemporary painting", "art photography"],
+        "taste": ["contemporary painting", "abstract art"],
+        "learn": ["modern art", "art history"],
+    }
+    fallback = fallback_by_intent.get(request.intent.value, ["contemporary art", "modern painting"])
+    specific = list(dict.fromkeys(
+        [*request.art_interests[:2], *request.mediums[:1], *directions[:3]]
+    ))[:3]
+    search_directions = list(dict.fromkeys([*specific, *fallback, *directions[3:]]))[:5]
+    if not search_directions:
+        search_directions = ["contemporary art", "modern painting", "contemporary photography"]
+
     works: list[Artwork] = []
+    all_providers = list(dict.fromkeys(provider for group in provider_groups for provider in group))
+    source_stats: dict[str, dict[str, Any]] = {}
+    enabled_providers = []
+    for provider in all_providers:
+        configured = _provider_configured(provider)
+        source_stats[provider.name] = {
+            "provider": provider.name,
+            "configured": configured,
+            "queries_attempted": 0,
+            "results_found": 0,
+            "errors": [],
+        }
+        if configured:
+            enabled_providers.append(provider)
+
     tasks = [
         _search_provider(provider, direction, limit=6)
-        for providers in provider_groups
-        for provider in providers
+        for provider in enabled_providers
         for direction in search_directions
     ]
     if tasks:
-        batches = await asyncio.gather(*tasks)
-        works.extend(item for batch in batches for item in batch)
+        responses = await asyncio.gather(*tasks)
+        for provider_name, direction, batch, error in responses:
+            stat = source_stats[provider_name]
+            stat["queries_attempted"] += 1
+            if error:
+                if error not in stat["errors"]:
+                    stat["errors"].append(error)
+            else:
+                stat["results_found"] += len(batch)
+                works.extend(batch)
 
     deduped: dict[str, Artwork] = {}
     for work in works:
         if _budget_ok(work, request):
             deduped.setdefault(work.id, work)
-    status[-1]["state"] = "done"
-    return list(deduped.values())
+    errors = [stat for stat in source_stats.values() if stat["errors"]]
+    progress["state"] = "warning" if errors else "done"
+    if errors:
+        progress["detail"] = "Some artwork sources did not respond. Other sources were still searched."
+        for stat in errors:
+            status.append({
+                "label": f"{stat['provider']} unavailable",
+                "state": "warning",
+                "detail": ", ".join(stat["errors"][:3]),
+            })
+    if not deduped:
+        logger.warning("No artwork candidates found for queries %s; source diagnostics=%s", search_directions, source_stats)
+    return list(deduped.values()), list(source_stats.values())
 
 
 def _candidate_payload(work: Artwork) -> dict[str, Any]:
@@ -319,7 +422,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     qloo_artists = await _qloo_taste(resolved, request, status)
     directions = await _build_search_plan(request, signals, qloo_artists, status)
 
-    works = await _research(directions, request, status)
+    works, source_diagnostics = await _research(directions, request, status)
 
     status.append({"label": "Reviewing the first set of results", "state": "active"})
     first_review = await review_candidates(
@@ -339,8 +442,19 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 
     if follow_up_queries:
         status.append({"label": "Looking again where the first search was weak", "state": "active"})
-        second_pass = await _research(follow_up_queries, request, status)
+        second_pass, second_source_diagnostics = await _research(follow_up_queries, request, status)
         works.extend(second_pass)
+        stats_by_provider = {item["provider"]: item for item in source_diagnostics}
+        for new_stat in second_source_diagnostics:
+            current = stats_by_provider.get(new_stat["provider"])
+            if current is None:
+                stats_by_provider[new_stat["provider"]] = new_stat
+                continue
+            current["configured"] = current["configured"] or new_stat["configured"]
+            current["queries_attempted"] += new_stat["queries_attempted"]
+            current["results_found"] += new_stat["results_found"]
+            current["errors"] = list(dict.fromkeys(current["errors"] + new_stat["errors"]))
+        source_diagnostics = list(stats_by_provider.values())
         status[-1]["state"] = "done"
 
         deduped: dict[str, Artwork] = {work.id: work for work in works}
@@ -404,6 +518,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             ],
             "purchase_inventory_found": len(purchasable),
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
+            "source_diagnostics": source_diagnostics,
+            "entity_matches_found": len(resolved),
+            "related_artists_found": len(qloo_artists),
         },
         "summary": intent_summary,
         "brief": {
@@ -427,6 +544,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "related_artists": qloo_artists[:8],
         },
         "search_directions": directions,
+        "search_directions_used": list(dict.fromkeys(
+            item.get("label", "") for item in status if item.get("label")
+        )),
         "critique": review_data.get("critique", ""),
         "results": [_serialize(work, request, qloo_artists, review_data) for work in primary],
         "not_for_sale": [_serialize(work, request, qloo_artists, review_data) for work in secondary],

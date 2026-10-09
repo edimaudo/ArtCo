@@ -9,7 +9,7 @@ load_dotenv()
 QLOO_BASE_URL = "https://hackathon.api.qloo.com"
 QLOO_API_KEY = os.getenv("QLOO_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ARTSY_XAPP_TOKEN = os.getenv("ARTSY_XAPP_TOKEN", "")
 ARTSY_PARTNER_ID = os.getenv("ARTSY_PARTNER_ID", "")
 ARTLOGIC_FEED_URL = os.getenv("ARTLOGIC_FEED_URL", "")

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 import httpx
 
 from .config import QLOO_API_KEY, QLOO_ARTIST_TAKE, QLOO_BASE_URL, QLOO_SEARCH_LIMIT, REQUEST_TIMEOUT
+
+logger = logging.getLogger(__name__)
 
 # These are the current Insights entity types documented for the Qloo hackathon.
 # Music is represented by the artist entity type; food/drink places use place/brand.
@@ -28,7 +31,10 @@ def _headers() -> dict[str, str]:
 
 async def search_entities(query: str) -> list[dict[str, Any]]:
     """Resolve a user's cultural reference using Qloo Entity Search."""
-    if not QLOO_API_KEY or not query.strip():
+    if not query.strip():
+        return []
+    if not QLOO_API_KEY:
+        logger.warning("Qloo entity search skipped because QLOO_API_KEY is not configured")
         return []
 
     params = [
@@ -45,8 +51,11 @@ async def search_entities(query: str) -> list[dict[str, Any]]:
             params=params,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"Qloo entity search failed ({response.status_code}): {response.text[:300]}")
-        return _extract_entities(response.json())
+            raise RuntimeError(f"Qloo entity search failed (HTTP {response.status_code})")
+        payload = response.json()
+        entities = _extract_entities(payload)
+        logger.info("Qloo entity search query=%r returned %d entities", query, len(entities))
+        return entities
 
 
 async def get_artist_insights(
@@ -54,7 +63,10 @@ async def get_artist_insights(
     discovery_level: int,
 ) -> list[dict[str, Any]]:
     """Ask Qloo for artist results influenced by the user's cross-domain taste."""
-    if not QLOO_API_KEY or not entity_ids:
+    if not entity_ids:
+        return []
+    if not QLOO_API_KEY:
+        logger.warning("Qloo Insights skipped because QLOO_API_KEY is not configured")
         return []
 
     trend_bias = "low" if discovery_level < 35 else "medium" if discovery_level < 70 else "high"
@@ -76,8 +88,11 @@ async def get_artist_insights(
             params=params,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"Qloo artist insights failed ({response.status_code}): {response.text[:300]}")
-        return _extract_entities(response.json())
+            raise RuntimeError(f"Qloo artist insights failed (HTTP {response.status_code})")
+        payload = response.json()
+        artists = _extract_entities(payload)
+        logger.info("Qloo artist insights returned %d entities from %d input signals", len(artists), len(entity_ids[:8]))
+        return artists
 
 
 def _extract_entities(payload: dict[str, Any]) -> list[dict[str, Any]]:

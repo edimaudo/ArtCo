@@ -49,10 +49,14 @@ async def main():
         return SimpleNamespace(queries=["Test Artist", "minimalist painting"])
 
     review_calls = 0
-    async def fake_review(*args, **kwargs):
+    async def fake_review(intent, user_request, candidates, discovery_level, purchase_required, number_of_works):
         nonlocal review_calls
         review_calls += 1
-        calls["review"].append(args[1])
+        calls["review"].append(user_request)
+        assert isinstance(candidates, list)
+        assert isinstance(discovery_level, int)
+        assert isinstance(purchase_required, bool)
+        assert isinstance(number_of_works, int)
         if review_calls == 1:
             return SimpleNamespace(
                 assessments=[SimpleNamespace(artwork_id="commercial-1", score=92, fit_reason="Strong brief fit.", concern="")],

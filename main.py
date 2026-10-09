@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from services.concierge import run
 from services.payments import PaymentUnavailable, PaymentConfigurationError, create_checkout_session, parse_webhook, verify_webhook_signature
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ArtCo | Your personal art concierge",
@@ -126,7 +129,80 @@ async def diagnostics() -> dict[str, Any]:
     }
 
 
+@app.get("/api/diagnostics/live")
+async def diagnostics_live() -> dict[str, Any]:
+    """Safe live smoke test for the configured model APIs and open art sources.
+
+    This endpoint returns configuration/health metadata and counts only; it never
+    returns credentials or raw upstream response bodies.
+    """
+    from services import config
+    from services.qloo import search_entities, get_artist_insights
+    from services.llm import extract_request_signals
+    from services.art_sources import ArtInstituteProvider, MetProvider, ClevelandProvider
+
+    async def probe(label: str, operation, count_field: str | None = None) -> dict[str, Any]:
+        try:
+            result = await asyncio.wait_for(operation(), timeout=18)
+            count = len(result) if hasattr(result, "__len__") else None
+            value = {"name": label, "ok": True}
+            if count_field:
+                value[count_field] = count
+            return value
+        except Exception as exc:
+            logger.warning("Live diagnostics probe %s failed (%s)", label, type(exc).__name__)
+            return {"name": label, "ok": False, "error": type(exc).__name__}
+
+    async def qloo_probe() -> dict[str, Any]:
+        try:
+            entities = await asyncio.wait_for(search_entities("Radiohead"), timeout=18)
+            entity_ids = [str(item.get("id")) for item in entities if item.get("id")][:5]
+            insights = await asyncio.wait_for(get_artist_insights(entity_ids, 50), timeout=18) if entity_ids else []
+            return {
+                "name": "Qloo Search + Insights",
+                "ok": bool(entities) and (bool(insights) or not entity_ids),
+                "entities_found": len(entities),
+                "insights_found": len(insights),
+            }
+        except Exception as exc:
+            logger.warning("Live Qloo probe failed (%s)", type(exc).__name__)
+            return {"name": "Qloo Search + Insights", "ok": False, "error": type(exc).__name__}
+
+    gemini_task = probe(
+        "Gemini request interpretation",
+        lambda: extract_request_signals("Find contemporary art inspired by Radiohead", [], []),
+        None,
+    )
+    aic_task = probe("Art Institute of Chicago", lambda: ArtInstituteProvider().search("contemporary art", limit=2), "works_found")
+    met_task = probe("The Met", lambda: MetProvider().search("contemporary art", limit=2), "works_found")
+    cleveland_task = probe("Cleveland Museum of Art", lambda: ClevelandProvider().search("contemporary art", limit=2), "works_found")
+
+    qloo_result, gemini_result, aic_result, met_result, cleveland_result = await asyncio.gather(
+        qloo_probe(), gemini_task, aic_task, met_task, cleveland_task
+    )
+    return {
+        "qloo_base_url": config.QLOO_BASE_URL,
+        "qloo_configured": bool(config.QLOO_API_KEY),
+        "gemini_configured": bool(config.GEMINI_API_KEY),
+        "probes": [qloo_result, gemini_result, aic_result, met_result, cleveland_result],
+        "hint": "If a probe is not configured or fails, review the matching environment variable and deployment logs.",
+    }
+
+
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
-    result: dict[str, Any] = await run(payload)
-    return JSONResponse(result)
+    try:
+        result: dict[str, Any] = await run(payload)
+        return JSONResponse(result)
+    except Exception as exc:
+        logger.exception("Concierge request failed")
+        # Preserve a useful, non-sensitive API response instead of returning an
+        # unexplained framework 500 page to the frontend.
+        return JSONResponse(
+            {
+                "success": False,
+                "detail": "The concierge could not complete this search. Check the service configuration and try again.",
+                "error_type": type(exc).__name__,
+            },
+            status_code=502,
+        )

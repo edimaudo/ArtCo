@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, TypeVar
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from .config import GEMINI_API_KEY, GEMINI_MODEL
 
 T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 class RequestSignals(BaseModel):
@@ -70,7 +72,9 @@ async def _generate_structured(model: type[T], prompt: str) -> T | None:
         from google.genai import types
 
         client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
+        # Use the SDK's asynchronous client; the synchronous method blocked the
+        # FastAPI event loop while the rest of the concierge waited on APIs.
+        response = await client.aio.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -84,7 +88,8 @@ async def _generate_structured(model: type[T], prompt: str) -> T | None:
         if payload is None:
             return None
         return model.model_validate(payload)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Gemini structured generation failed (%s); using deterministic fallback", type(exc).__name__)
         return None
 
 
@@ -167,22 +172,40 @@ Return JSON only with queries and a one-sentence rationale.
         if result is not None and result.queries:
             return result
 
+    # Artwork catalogues search artwork metadata, not a user's whole cultural
+    # profile. Search art-related terms and Qloo-expanded artist directions
+    # before trying cultural references such as musicians or fashion brands.
     directions: list[str] = []
-    directions.extend(art_interests[:4])
-    directions.extend(mediums[:3])
-    directions.extend(str(item) for item in cultural_references[:4] if item)
-    directions.extend(str(item.get("name")) for item in qloo_artists[:6] if item.get("name"))
+    directions.extend(art_interests[:3])
+    directions.extend(mediums[:2])
+    directions.extend(str(item.get("name")) for item in qloo_artists[:3] if item.get("name"))
     if discovery_level >= 70:
         directions.extend(["adjacent contemporary art", "emerging contemporary artists", "cross-disciplinary art"])
     elif discovery_level <= 30:
         directions.extend(["modern art", "minimalist art", "figurative contemporary art"])
     else:
         directions.extend(["contemporary art", "modern painting", "contemporary photography"])
+    if intent == "learn":
+        directions.extend(["art history", "modern art", "contemporary art"])
+    elif intent == "curate":
+        directions.extend(["contemporary painting", "art photography", "modern sculpture"])
+    elif intent == "buy":
+        directions.extend(["original contemporary art", "contemporary painting", "limited edition art print"])
+    elif intent == "taste":
+        directions.extend(["contemporary painting", "abstract art", "figurative art"])
+    elif discovery_level >= 70:
+        directions.extend(["emerging contemporary artists", "experimental contemporary art", "cross-disciplinary art"])
+    elif discovery_level <= 30:
+        directions.extend(["modern painting", "figurative art", "minimalist art"])
+    else:
+        directions.extend(["contemporary art", "modern painting", "contemporary photography"])
     if feedback:
-        directions.append(feedback)
+        # Keep a short feedback phrase, but never use it as the only search term.
+        directions.append(feedback[:120])
+    directions.extend(str(item) for item in cultural_references[:2] if item)
     if not directions:
         directions = ["contemporary art", "modern art", "painting", "photography"]
-    cleaned = list(dict.fromkeys(item.strip() for item in directions if item.strip()))[:6]
+    cleaned = list(dict.fromkeys(item.strip() for item in directions if item.strip()))[:8]
     return SearchPlan(queries=cleaned, rationale="The search combines your request with related cultural directions and your discovery preference.")
 
 
