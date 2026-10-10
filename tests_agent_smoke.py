@@ -57,18 +57,16 @@ async def main():
         assert isinstance(discovery_level, int)
         assert isinstance(purchase_required, bool)
         assert isinstance(number_of_works, int)
-        if review_calls == 1:
-            return SimpleNamespace(
-                assessments=[SimpleNamespace(artwork_id="commercial-1", score=92, fit_reason="Strong brief fit.", concern="")],
-                follow_up_queries=["minimalist portrait"], critique="The initial pool is too narrow.", coverage="More variety needed.",
-            )
         return SimpleNamespace(
             assessments=[
                 SimpleNamespace(artwork_id="commercial-1", score=92, fit_reason="Strong brief fit.", concern=""),
                 SimpleNamespace(artwork_id="institution-1", score=80, fit_reason="Good cultural fit.", concern="Not purchasable."),
             ],
-            follow_up_queries=[], critique="The revised pool covers the brief.", coverage="Good.",
+            follow_up_queries=["minimalist portrait"],
+            critique="The brief is covered by commercial and institutional options.",
+            coverage="Good coverage.",
         )
+
 
     commercial = FakeProvider("Commercial", {
         "Test Artist": [work("commercial-1", "Test Artist", "commercial", "available", 3200)],
@@ -77,7 +75,8 @@ async def main():
     })
     institutional = FakeProvider("Institution", {
         "Test Artist": [work("institution-1", "Test Artist")],
-        "minimalist painting": [],
+        "minimalist painting": [work("institution-1", "Test Artist")],
+        "contemporary art for sale": [work("institution-2", "Another Artist")],
         "minimalist portrait": [work("institution-2", "Another Artist")],
     })
 
@@ -111,8 +110,10 @@ async def main():
         assert "Radiohead" in calls["qloo_search"]
         assert result["results"][0]["id"] == "commercial-1"
         assert all(item["source_kind"] == "commercial" and item["availability"] == "available" for item in result["results"])
-        assert result["critique"] == "The revised pool covers the brief."
-        assert review_calls == 2
+        assert result["critique"] == "The brief is covered by commercial and institutional options."
+        assert review_calls == 1
+        assert result["not_for_sale"]
+        assert all(item["image_url"] for item in result["results"] + result["not_for_sale"])
         print("agent smoke: PASS")
         print(f"qloo searches: {calls['qloo_search']}")
         print(f"review passes: {review_calls}")

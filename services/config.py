@@ -23,7 +23,7 @@ try:
     STRIPE_CHECKOUT_CATALOG = __import__("json").loads(os.getenv("ARTCO_STRIPE_CHECKOUT_CATALOG", "{}"))
 except Exception:
     STRIPE_CHECKOUT_CATALOG = {}
-ARTWORK_RESULT_LIMIT = int(os.getenv("ARTWORK_RESULT_LIMIT", "18"))
-REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "6"))
-QLOO_SEARCH_LIMIT = int(os.getenv("QLOO_SEARCH_LIMIT", "5"))
-QLOO_ARTIST_TAKE = int(os.getenv("QLOO_ARTIST_TAKE", "12"))
+ARTWORK_RESULT_LIMIT = min(8, max(5, int(os.getenv("ARTWORK_RESULT_LIMIT", "8"))))
+REQUEST_TIMEOUT = min(4.5, max(2.0, float(os.getenv("REQUEST_TIMEOUT", "4"))))
+QLOO_SEARCH_LIMIT = min(4, max(2, int(os.getenv("QLOO_SEARCH_LIMIT", "3"))))
+QLOO_ARTIST_TAKE = min(8, max(4, int(os.getenv("QLOO_ARTIST_TAKE", "8"))))

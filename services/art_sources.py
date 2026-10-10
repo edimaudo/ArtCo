@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -49,25 +50,30 @@ class ArtInstituteProvider:
     base_url = "https://api.artic.edu/api/v1/artworks"
 
     async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
+        # Search broadly enough to replace records with no usable reproduction,
+        # then return only works with an actual image identifier.
         params = {
             "q": query,
-            "limit": min(limit, 50),
+            "limit": min(max(limit * 3, limit), 40),
             "fields": "id,title,artist_display,date_display,medium_display,dimensions,image_id,credit_line,is_public_domain",
+            "query[term][is_public_domain]": "true",
         }
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.get(f"{self.base_url}/search", params=params)
             response.raise_for_status()
             payload = response.json()
         iiif = payload.get("config", {}).get("iiif_url", "https://www.artic.edu/iiif/2")
-        return [self._map(item, iiif) for item in payload.get("data", [])]
+        output = [self._map(item, iiif) for item in payload.get("data", [])]
+        return [work for work in output if _usable_image_url(work.image_url)][:limit]
 
     def _map(self, item: dict[str, Any], iiif: str) -> Artwork:
         image_id = item.get("image_id")
+        image_url = f"{iiif.rstrip('/')}/{image_id}/full/843,/0/default.jpg" if image_id else None
         return Artwork(
             id=f"aic:{item.get('id')}",
             title=item.get("title") or "Untitled",
             artist=item.get("artist_display") or "Unknown artist",
-            image_url=f"{iiif}/{image_id}/full/843,/0/default.jpg" if image_id else None,
+            image_url=image_url,
             detail_url=f"https://www.artic.edu/artworks/{item.get('id')}",
             source=self.name,
             source_kind="institution",
@@ -86,25 +92,38 @@ class MetProvider:
     base_url = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 
     async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
+        # Keep detail fan-out small; the Met search endpoint returns IDs, while
+        # object details carry the image URLs needed by the gallery.
+        requested = min(max(limit, 1), 5)
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.get(
                 f"{self.base_url}/search",
-                params={"q": query, "hasImages": "true", "limit": min(limit, 50), "offset": 0},
+                params={"q": query, "hasImages": "true", "limit": requested, "offset": 0},
             )
             response.raise_for_status()
-            ids = (response.json().get("objectIDs") or [])[: min(limit, 18)]
+            ids = (response.json().get("objectIDs") or [])[:requested]
             details = await asyncio.gather(
                 *(client.get(f"{self.base_url}/objects/{object_id}") for object_id in ids),
                 return_exceptions=True,
             )
-        return [self._map(result.json()) for result in details if isinstance(result, httpx.Response) and result.status_code == 200]
+        output: list[Artwork] = []
+        for result in details:
+            if not isinstance(result, httpx.Response) or result.status_code != 200:
+                continue
+            try:
+                work = self._map(result.json())
+            except (TypeError, ValueError):
+                continue
+            if _usable_image_url(work.image_url):
+                output.append(work)
+        return output[:limit]
 
     def _map(self, item: dict[str, Any]) -> Artwork:
         return Artwork(
             id=f"met:{item.get('objectID')}",
             title=item.get("title") or "Untitled",
             artist=item.get("artistDisplayName") or "Unknown artist",
-            image_url=item.get("primaryImageSmall") or item.get("primaryImage"),
+            image_url=_normalise_image_url(item.get("primaryImageSmall") or item.get("primaryImage")),
             detail_url=item.get("objectURL"),
             source=self.name,
             source_kind="institution",
@@ -124,17 +143,26 @@ class ClevelandProvider:
 
     async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            response = await client.get(self.base_url, params={"q": query, "limit": min(limit, 50)})
+            response = await client.get(self.base_url, params={"q": query, "limit": min(max(limit * 3, limit), 40)})
             response.raise_for_status()
             payload = response.json()
-        return [self._map(item) for item in (payload.get("data") or [])[:limit]]
+        output = [self._map(item) for item in (payload.get("data") or []) if isinstance(item, dict)]
+        return [work for work in output if _usable_image_url(work.image_url)][:limit]
 
     def _map(self, item: dict[str, Any]) -> Artwork:
         images = item.get("images") or {}
-        image_url = next(
-            (value.get("url") for value in (images.get(key) for key in ("web", "print", "original")) if isinstance(value, dict) and value.get("url")),
-            None,
-        )
+        image_url = None
+        if isinstance(images, dict):
+            for key in ("web", "print", "original"):
+                value = images.get(key)
+                if isinstance(value, dict):
+                    image_url = _normalise_image_url(value.get("url") or value.get("href"))
+                    if image_url:
+                        break
+                elif isinstance(value, str):
+                    image_url = _normalise_image_url(value)
+                    if image_url:
+                        break
         return Artwork(
             id=f"cma:{item.get('id') or item.get('accession_number')}",
             title=item.get("title") or "Untitled",
@@ -158,37 +186,81 @@ class RijksmuseumProvider:
     base_url = "https://data.rijksmuseum.nl/search/collection"
 
     async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
+        # Rijksmuseum search returns Linked Art identifiers, not image URLs.
+        # Resolve only a very small fallback set through the documented
+        # object -> VisualItem -> DigitalObject chain to keep search responsive.
+        requested = min(max(limit, 1), 2)
         headers = {"Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers) as client:
-            response = await client.get(self.base_url, params={"description": query, "imageAvailable": "true"})
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers, follow_redirects=True) as client:
+            response = await client.get(
+                self.base_url,
+                params={"description": query, "imageAvailable": "true", "type": "painting"},
+            )
             response.raise_for_status()
             payload = response.json()
-            items = payload.get("orderedItems") or payload.get("items") or []
-            identifiers = [item.get("id") for item in items if isinstance(item, dict) and item.get("id")][: min(limit, 15)]
-            details = await asyncio.gather(*(client.get(url) for url in identifiers), return_exceptions=True)
-        return [self._map(result.json()) for result in details if isinstance(result, httpx.Response) and result.status_code == 200]
+            items = payload.get("orderedItems") or []
+            identifiers = [item.get("id") for item in items if isinstance(item, dict) and item.get("id")][:requested]
+            works = await asyncio.gather(
+                *(self._resolve_work(client, uri) for uri in identifiers),
+                return_exceptions=True,
+            )
+        return [work for work in works if isinstance(work, Artwork) and _usable_image_url(work.image_url)][:limit]
 
-    def _map(self, item: dict[str, Any]) -> Artwork:
-        title = "Untitled"
-        identified_by = item.get("identified_by") or []
-        if identified_by and isinstance(identified_by[0], dict):
-            title = identified_by[0].get("content") or title
-        return Artwork(
-            id=f"rijks:{item.get('id') or item.get('@id')}",
-            title=title,
-            artist="Unknown artist",
-            image_url=None,
-            detail_url=item.get("id") or item.get("@id"),
-            source=self.name,
-            source_kind="institution",
-            availability="not_for_sale",
-            price=None,
-            currency=None,
-            medium=None,
-            dimensions=None,
-            year=None,
-            description=None,
-        )
+    async def _get_linked_record(self, client: httpx.AsyncClient, uri: str) -> dict[str, Any]:
+        parsed = urlparse(uri)
+        identifier = parsed.path.rstrip("/").split("/")[-1]
+        response = await client.get(f"https://data.rijksmuseum.nl/{identifier}", params={"_profile": "la-framed"})
+        response.raise_for_status()
+        return response.json()
+
+    async def _resolve_work(self, client: httpx.AsyncClient, object_uri: str) -> Artwork | None:
+        try:
+            obj = await self._get_linked_record(client, object_uri)
+            visual_ref = next((item.get("id") for item in (obj.get("shows") or []) if isinstance(item, dict) and item.get("id")), None)
+            if not visual_ref:
+                return None
+            visual = await self._get_linked_record(client, visual_ref)
+            digital_ref = next((item.get("id") for item in (visual.get("digitally_shown_by") or []) if isinstance(item, dict) and item.get("id")), None)
+            if not digital_ref:
+                return None
+            digital = await self._get_linked_record(client, digital_ref)
+            access_point = next((item.get("id") for item in (digital.get("access_point") or []) if isinstance(item, dict) and item.get("id")), None)
+            if not access_point:
+                return None
+            # Normalise to an appropriately sized, direct IIIF image URL.
+            parsed_image = urlparse(access_point)
+            parts = parsed_image.path.strip("/").split("/")
+            image_id = parts[0] if parts else ""
+            image_url = f"https://iiif.micr.io/{image_id}/full/800,/0/default.jpg" if image_id else access_point
+            title = next((item.get("content") for item in (obj.get("identified_by") or []) if isinstance(item, dict) and item.get("content")), None) or "Untitled"
+            artist = "Unknown artist"
+            production = obj.get("produced_by") or {}
+            creators = production.get("carried_out_by") or [] if isinstance(production, dict) else []
+            if creators and isinstance(creators[0], dict):
+                artist = creators[0].get("_label") or creators[0].get("label") or artist
+            year = None
+            timespan = production.get("timespan") if isinstance(production, dict) else None
+            if isinstance(timespan, dict):
+                year = timespan.get("begin_of_the_begin") or timespan.get("_label")
+            return Artwork(
+                id=f"rijks:{urlparse(object_uri).path.rstrip('/').split('/')[-1]}",
+                title=title,
+                artist=artist,
+                image_url=image_url,
+                detail_url=object_uri,
+                source=self.name,
+                source_kind="institution",
+                availability="not_for_sale",
+                price=None,
+                currency=None,
+                medium=None,
+                dimensions=None,
+                year=str(year) if year else None,
+                description=None,
+            )
+        except Exception as exc:
+            logger.debug("Rijksmuseum image resolution failed (%s)", type(exc).__name__)
+            return None
 
 
 class ArtsyProvider:
@@ -260,7 +332,7 @@ class Collect24Provider:
                 if isinstance(value, (int, float)):
                     dimension_parts.append(f"{label} {value:g} cm")
         image_data = item.get("images") or {}
-        image_url = image_data.get("cover_url") or image_data.get("thumbnail_url") if isinstance(image_data, dict) else None
+        image_url = _normalise_image_url(image_data.get("cover_url") or image_data.get("thumbnail_url")) if isinstance(image_data, dict) else None
         price_value = price_data.get("amount") if isinstance(price_data, dict) else None
         try:
             price_value = float(price_value) if price_value is not None else None
@@ -306,7 +378,7 @@ def _map_artsy(item: dict[str, Any]) -> Artwork:
         id=f"artsy:{item.get('id')}",
         title=item.get("title") or "Untitled",
         artist=artist or "Unknown artist",
-        image_url=(item.get("_links", {}).get("thumbnail", {}) or {}).get("href"),
+        image_url=_normalise_image_url((item.get("_links", {}).get("thumbnail", {}) or {}).get("href")),
         detail_url=(item.get("_links", {}).get("permalink", {}) or {}).get("href"),
         source="Artsy",
         source_kind="commercial",
@@ -379,6 +451,29 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
             )
         )
     return output
+
+
+
+def _normalise_image_url(value: Any) -> str | None:
+    """Convert provider image templates into browser-ready HTTPS URLs."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    url = value.strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    url = url.replace("{?width,height}", "?width=900&height=1125")
+    url = url.replace("{?width}", "?width=900")
+    url = url.replace("{?height}", "?height=1125")
+    # Some APIs return templates with brace placeholders that need removal.
+    url = url.replace("{width}", "900").replace("{height}", "1125")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return url
+
+
+def _usable_image_url(value: Any) -> bool:
+    return bool(_normalise_image_url(value))
 
 
 def _matches_query(work: Artwork, query: str) -> bool:

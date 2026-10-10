@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from models.schemas import ConciergeRequest
-from .art_sources import Artwork, commercial_providers, institutional_providers
+from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .llm import CandidateReview, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
@@ -33,7 +33,7 @@ async def _resolve_entities(
                 *request.additional_interests,
             ]
         )
-    )[:12]
+    )[:6]
 
     # With no explicit references, allow Qloo to resolve the user's request itself.
     if not queries and request.goal:
@@ -230,8 +230,12 @@ def _safe_provider_error(exc: Exception) -> str:
 
 async def _search_provider(provider: Any, direction: str, limit: int) -> tuple[str, str, list[Artwork], str | None]:
     try:
-        works = await provider.search(direction, limit=limit)
-        return provider.name, direction, [replace(work, matched_direction=direction) for work in works], None
+        works = await asyncio.wait_for(provider.search(direction, limit=limit), timeout=max(7.0, config.REQUEST_TIMEOUT * 2 + 1))
+        normalized = [
+            replace(work, matched_direction=direction, image_url=_normalise_image_url(work.image_url))
+            for work in works
+        ]
+        return provider.name, direction, normalized, None
     except Exception as exc:
         logger.exception("Artwork provider %s failed while searching direction %r", provider.name, direction)
         return provider.name, direction, [], _safe_provider_error(exc)
@@ -241,11 +245,22 @@ async def _research(
     directions: list[str],
     request: ConciergeRequest,
     status: list[dict[str, str]],
+    *,
+    include_extended_sources: bool = False,
 ) -> tuple[list[Artwork], list[dict[str, Any]]]:
+    """Search a bounded set of providers in parallel.
+
+    Previous builds multiplied up to five directions by every provider, then did
+    a second full fan-out and a second model review. This version makes one query
+    per provider in each pass and only expands the source set when image-bearing
+    results are insufficient.
+    """
     progress = {"label": "Researching artwork sources", "state": "active"}
     status.append(progress)
     commercial = commercial_providers()
     institutional = institutional_providers()
+    if not include_extended_sources:
+        institutional = [provider for provider in institutional if provider.name != "Rijksmuseum"]
 
     if request.intent.value == "learn":
         provider_groups = [institutional, commercial]
@@ -254,23 +269,22 @@ async def _research(
     else:
         provider_groups = [institutional, commercial]
 
-    # Use a bounded mix of specific and broad terms. Cultural items such as a
-    # favourite musician are useful signals for Qloo, but often return no rows
-    # when sent verbatim to a museum artwork catalogue. Always reserve searches
-    # for broad visual-art categories so source coverage does not collapse.
     fallback_by_intent = {
         "buy": ["contemporary art for sale", "original contemporary painting"],
         "curate": ["contemporary painting", "art photography"],
         "taste": ["contemporary painting", "abstract art"],
         "learn": ["modern art", "art history"],
     }
-    fallback = fallback_by_intent.get(request.intent.value, ["contemporary art", "modern painting"])
-    specific = list(dict.fromkeys(
-        [*request.art_interests[:2], *request.mediums[:1], *directions[:3]]
-    ))[:3]
-    search_directions = list(dict.fromkeys([*specific, *fallback, *directions[3:]]))[:5]
+    fallback = fallback_by_intent.get(request.intent.value, ["contemporary art", "modern painting", "contemporary photography"])
+    proposed = list(dict.fromkeys([
+        *[item for item in directions if isinstance(item, str) and item.strip()][:4],
+        *request.art_interests[:2],
+        *request.mediums[:1],
+        *fallback,
+    ]))
+    search_directions = [item.strip() for item in proposed if item and item.strip()][:4]
     if not search_directions:
-        search_directions = ["contemporary art", "modern painting", "contemporary photography"]
+        search_directions = ["contemporary art"]
 
     works: list[Artwork] = []
     all_providers = list(dict.fromkeys(provider for group in provider_groups for provider in group))
@@ -283,15 +297,17 @@ async def _research(
             "configured": configured,
             "queries_attempted": 0,
             "results_found": 0,
+            "images_found": 0,
             "errors": [],
         }
         if configured:
             enabled_providers.append(provider)
 
+    # One query per provider per pass. Rotate through the best search directions
+    # to retain breadth without an N-providers × N-queries explosion.
     tasks = [
-        _search_provider(provider, direction, limit=6)
-        for provider in enabled_providers
-        for direction in search_directions
+        _search_provider(provider, search_directions[index % len(search_directions)], limit=5)
+        for index, provider in enumerate(enabled_providers)
     ]
     if tasks:
         responses = await asyncio.gather(*tasks)
@@ -303,12 +319,16 @@ async def _research(
                     stat["errors"].append(error)
             else:
                 stat["results_found"] += len(batch)
+                stat["images_found"] += sum(1 for work in batch if _usable_image_url(work.image_url))
                 works.extend(batch)
 
+    # Remove duplicates but retain image-less metadata long enough to diagnose
+    # poor provider data. They are filtered before any visible result is chosen.
     deduped: dict[str, Artwork] = {}
     for work in works:
         if _budget_ok(work, request):
             deduped.setdefault(work.id, work)
+
     errors = [stat for stat in source_stats.values() if stat["errors"]]
     progress["state"] = "warning" if errors else "done"
     if errors:
@@ -319,8 +339,8 @@ async def _research(
                 "state": "warning",
                 "detail": ", ".join(stat["errors"][:3]),
             })
-    if not deduped:
-        logger.warning("No artwork candidates found for queries %s; source diagnostics=%s", search_directions, source_stats)
+    if not any(_usable_image_url(work.image_url) for work in deduped.values()):
+        logger.warning("No image-bearing artwork candidates found for queries %s; source diagnostics=%s", search_directions, source_stats)
     return list(deduped.values()), list(source_stats.values())
 
 
@@ -372,8 +392,9 @@ def _select(
     review_by_id = {item.artwork_id: item for item in (review.assessments if review else [])}
 
     ranked = sorted(
-        works,
+        (work for work in works if _usable_image_url(work.image_url)),
         key=lambda work: (
+            1 if _usable_image_url(work.image_url) else 0,
             review_by_id.get(work.id).score if work.id in review_by_id else _deterministic_score(work, request, qloo_artists, work.matched_direction or ""),
             _deterministic_score(work, request, qloo_artists, work.matched_direction or ""),
         ),
@@ -382,7 +403,7 @@ def _select(
 
     seen_artists: set[str] = set()
     selected: list[Artwork] = []
-    target = max(1, request.number_of_works)
+    target = min(max(1, request.number_of_works), 8)
     for work in ranked:
         artist_key = work.artist.strip().lower()
         # Curate prefers artist variety; other intents can return more than one work.
@@ -393,21 +414,14 @@ def _select(
         selected.append(work)
         if artist_key:
             seen_artists.add(artist_key)
-        if len(selected) >= (target if request.intent.value in {"curate", "buy"} else 8):
+        if len(selected) >= (target if request.intent.value in {"curate", "buy"} else 10):
             break
     return selected
 
 
-def _should_review_again(request: ConciergeRequest, review: CandidateReview | None, works: list[Artwork]) -> bool:
-    if review is None:
-        if request.purchase_required:
-            return sum(w.source_kind == "commercial" and w.availability == "available" for w in works) < 3
-        return len(works) < max(6, request.number_of_works + 3)
-    return bool(review.follow_up_queries)
-
 
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
-    """Run the native Python concierge loop with model-assisted planning and critique."""
+    """Run a bounded concierge search and return an image-ready shortlist."""
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
     signals = await extract_request_signals(
@@ -423,29 +437,29 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     directions = await _build_search_plan(request, signals, qloo_artists, status)
 
     works, source_diagnostics = await _research(directions, request, status)
+    image_count = len({work.id for work in works if _usable_image_url(work.image_url)})
 
-    status.append({"label": "Reviewing the first set of results", "state": "active"})
-    first_review = await review_candidates(
-        request.intent.value,
-        request.goal or "",
-        [_candidate_payload(work) for work in works],
-        request.discovery_level,
-        request.purchase_required,
-        request.number_of_works,
-    )
-    status[-1]["state"] = "done"
-
-    review = first_review
-    follow_up_queries = first_review.follow_up_queries if first_review else []
-    if _should_review_again(request, first_review, works) and not follow_up_queries:
-        follow_up_queries = list(dict.fromkeys(directions + ["adjacent contemporary art", "emerging contemporary artists"]))[-3:]
-
-    if follow_up_queries:
-        status.append({"label": "Looking again where the first search was weak", "state": "active"})
-        second_pass, second_source_diagnostics = await _research(follow_up_queries, request, status)
+    # Only run one small fallback pass when the first pass cannot fill a useful
+    # visual shortlist. It searches the extended source (Rijksmuseum) and extra
+    # directions, instead of repeating every query across every source.
+    if image_count < 5:
+        fallback_directions = list(dict.fromkeys([
+            *[item for item in directions[1:3] if item],
+            "contemporary painting with image",
+            "modern art collection",
+        ]))[:2]
+        status.append({"label": "Broadening the visual search", "state": "active"})
+        second_pass, second_diagnostics = await _research(
+            fallback_directions,
+            request,
+            status,
+            include_extended_sources=True,
+        )
         works.extend(second_pass)
+        by_id: dict[str, Artwork] = {work.id: work for work in works}
+        works = list(by_id.values())
         stats_by_provider = {item["provider"]: item for item in source_diagnostics}
-        for new_stat in second_source_diagnostics:
+        for new_stat in second_diagnostics:
             current = stats_by_provider.get(new_stat["provider"])
             if current is None:
                 stats_by_provider[new_stat["provider"]] = new_stat
@@ -453,31 +467,27 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             current["configured"] = current["configured"] or new_stat["configured"]
             current["queries_attempted"] += new_stat["queries_attempted"]
             current["results_found"] += new_stat["results_found"]
+            current["images_found"] = current.get("images_found", 0) + new_stat.get("images_found", 0)
             current["errors"] = list(dict.fromkeys(current["errors"] + new_stat["errors"]))
         source_diagnostics = list(stats_by_provider.values())
         status[-1]["state"] = "done"
 
-        deduped: dict[str, Artwork] = {work.id: work for work in works}
-        works = list(deduped.values())
-        status.append({"label": "Making the final selection", "state": "active"})
-        final_review = await review_candidates(
-            request.intent.value,
-            request.goal or "",
-            [_candidate_payload(work) for work in works],
-            request.discovery_level,
-            request.purchase_required,
-            request.number_of_works,
-        )
-        if final_review is not None:
-            review = final_review
-        status[-1]["state"] = "done"
-    else:
-        status.append({"label": "Making the final selection", "state": "done"})
+    # Only image-bearing works enter visible recommendations. An unusable image
+    # URL is not a recommendation-card substitute for actual artwork imagery.
+    works = [work for work in works if _usable_image_url(work.image_url) and _budget_ok(work, request)]
+    status.append({"label": "Selecting the strongest matches", "state": "active"})
+    review = await review_candidates(
+        request.intent.value,
+        request.goal or "",
+        [_candidate_payload(work) for work in works[:30]],
+        request.discovery_level,
+        request.purchase_required,
+        min(max(1, request.number_of_works), 8),
+    )
+    status[-1]["state"] = "done"
 
     selected = _select(works, request, qloo_artists, review)
     review_data = _review_map(review)
-
-    # For Buy, keep only genuine commercial inventory in the primary results.
     purchasable = [
         work for work in works
         if work.source_kind == "commercial" and work.availability == "available"
@@ -485,20 +495,23 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     not_for_sale = [work for work in works if not (work.source_kind == "commercial" and work.availability == "available")]
 
     if request.purchase_required:
-        primary = [work for work in selected if work.source_kind == "commercial" and work.availability == "available"][: request.number_of_works]
+        primary = [work for work in selected if work.source_kind == "commercial" and work.availability == "available"][: min(max(1, request.number_of_works), 8)]
     elif request.intent.value == "curate":
-        primary = selected[: request.number_of_works]
+        primary = selected[: min(max(1, request.number_of_works), 8)]
     else:
-        primary = selected[:8]
+        # Six recommendations leave room for a separate set of additional
+        # not-for-sale works below, for a 5–10 item overall result experience.
+        primary = selected[:6]
     primary_ids = {work.id for work in primary}
-    secondary = [work for work in not_for_sale if work.id not in primary_ids][:4]
+    secondary_limit = max(0, min(4, 10 - len(primary)))
+    secondary = [work for work in not_for_sale if work.id not in primary_ids][:secondary_limit]
 
     intent_summary = {
         "discover": "I used the things you like as cultural signals, then searched beyond the most obvious art matches.",
         "find": "I translated your request into a focused search, then compared the resulting works against the brief.",
         "taste": "I started from your references and explored related artists and works to help you understand what you respond to.",
         "curate": "I looked for works that fit your brief individually and make sense together as a group.",
-        "buy": "I prioritised commercial works marked as available to acquire. Works from institutional sources are separated below when they are useful references.",
+        "buy": "I prioritised commercial works marked as available to acquire. Additional works that are not for sale are shown separately when useful.",
         "learn": "I searched the requested artistic territory and selected works that help put the subject into context.",
     }[request.intent.value]
 
@@ -518,6 +531,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             ],
             "purchase_inventory_found": len(purchasable),
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
+            "image_bearing_works_found": len(works),
             "source_diagnostics": source_diagnostics,
             "entity_matches_found": len(resolved),
             "related_artists_found": len(qloo_artists),
@@ -534,7 +548,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "preferred_market": request.preferred_market,
             "budget_min": request.budget_min,
             "budget_max": request.budget_max,
-            "number_of_works": request.number_of_works,
+            "number_of_works": min(max(1, request.number_of_works), 8),
             "discovery_level": request.discovery_level,
         },
         "taste": {
@@ -544,9 +558,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "related_artists": qloo_artists[:8],
         },
         "search_directions": directions,
-        "search_directions_used": list(dict.fromkeys(
-            item.get("label", "") for item in status if item.get("label")
-        )),
+        "search_directions_used": list(dict.fromkeys(item.get("label", "") for item in status if item.get("label"))),
         "critique": review_data.get("critique", ""),
         "results": [_serialize(work, request, qloo_artists, review_data) for work in primary],
         "not_for_sale": [_serialize(work, request, qloo_artists, review_data) for work in secondary],
@@ -587,7 +599,7 @@ def _serialize(
         "id": work.id,
         "title": work.title,
         "artist": work.artist,
-        "image_url": work.image_url,
+        "image_url": _normalise_image_url(work.image_url),
         "detail_url": work.detail_url,
         "source": work.source,
         "source_kind": work.source_kind,

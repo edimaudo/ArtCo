@@ -159,10 +159,11 @@
       saved.innerHTML = works.map((work) => {
         const id = escapeAttribute(work.id);
         const image = work.image_url
-          ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
+          ? `<img data-artwork-image src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
           : '<div class="saved-thumb no-image">Image unavailable</div>';
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
+      bindArtworkImageFallbacks(saved);
       if (savedEmpty) savedEmpty.hidden = works.length > 0;
     }
 
@@ -375,12 +376,26 @@
     $('#tasteTags').innerHTML = tags.map((tag) => `<span class="taste-tag">${escapeHtml(tag)}</span>`).join('');
   }
 
+  function bindArtworkImageFallbacks(root) {
+    if (!root) return;
+    root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
+      image.addEventListener('error', () => {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'art-placeholder';
+        placeholder.textContent = 'Image temporarily unavailable';
+        placeholder.setAttribute('role', 'img');
+        placeholder.setAttribute('aria-label', 'Artwork image temporarily unavailable');
+        image.replaceWith(placeholder);
+      }, { once: true });
+    });
+  }
+
   function renderCard(work) {
     const available = work.availability === 'available' && work.source_kind === 'commercial';
     const availability = available ? 'available' : 'not_for_sale';
     const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
     const image = work.image_url
-      ? `<img src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy">`
+      ? `<img data-artwork-image src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
       : '<div class="art-placeholder">Image unavailable</div>';
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
@@ -428,9 +443,10 @@
     $('#resultsMeta').textContent = intent === 'buy'
       ? (available ? `${available} purchase option${available === 1 ? '' : 's'} found` : 'No purchase inventory found')
       : `${data.total_found || 0} works researched`;
-    const results = data.results || [];
+    const results = (data.results || []).slice(0, 8);
     if (results.length) {
       $('#artGrid').innerHTML = results.map(renderCard).join('');
+      bindArtworkImageFallbacks($('#artGrid'));
     } else {
       const diagnostic = data.diagnostics || {};
       const commercialConfigured = (diagnostic.commercial_sources_configured || []).length > 0;
@@ -448,13 +464,14 @@
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
-    const notForSale = data.not_for_sale || [];
+    const notForSale = (data.not_for_sale || []).slice(0, 4);
     $('#notForSaleSection').hidden = !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');
+      bindArtworkImageFallbacks($('#notForSaleGrid'));
       $('#notForSaleHint').textContent = intent === 'buy'
-        ? 'These works are not currently available to acquire, but they are relevant to what you asked me to find.'
-        : 'These works are useful references from institutional collections.';
+        ? 'Additional works related to your brief, but not currently available to acquire.'
+        : 'Additional works from museum and institutional collections. These are not available for purchase.';
     }
     renderTasteSummary(data);
   }
@@ -488,6 +505,7 @@
       return;
     }
     grid.innerHTML = state.saved.map(renderCard).join('');
+    bindArtworkImageFallbacks(grid);
   }
 
   function renderTastePage() {
