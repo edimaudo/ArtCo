@@ -7,7 +7,7 @@ from typing import Any
 
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
-from .llm import CandidateReview, extract_request_signals, plan_art_searches, review_candidates
+from .llm import CandidateReview, analyze_inspiration_images, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -424,12 +424,26 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     """Run a bounded concierge search and return an image-ready shortlist."""
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
+    visual_analysis = await analyze_inspiration_images(request.goal or "", request.inspiration_images)
+    if request.inspiration_images:
+        if visual_analysis:
+            status.append({"label": "Interpreting your inspiration images", "state": "done"})
+        else:
+            status.append({
+                "label": "Visual analysis unavailable",
+                "state": "warning",
+                "detail": "The images were received, but could not be interpreted. The search will use your written request and saved taste.",
+            })
+
     signals = await extract_request_signals(
         request.goal or "",
         request.loves,
         request.additional_interests + request.art_interests,
         request.avoid_references,
     )
+    if visual_analysis:
+        visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes]
+        signals.art_interests = list(dict.fromkeys([*visual_terms, *signals.art_interests]))[:8]
     request = _apply_signal_overrides(request, signals)
 
     resolved = await _resolve_entities(request, status, signals)
@@ -476,9 +490,21 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     # URL is not a recommendation-card substitute for actual artwork imagery.
     works = [work for work in works if _usable_image_url(work.image_url) and _budget_ok(work, request)]
     status.append({"label": "Selecting the strongest matches", "state": "active"})
+    review_context = request.goal or ""
+    if visual_analysis:
+        visual_context = (
+            f"\nVisual inspiration summary: {visual_analysis.summary}"
+            f"\nVisible attributes: {', '.join(visual_analysis.visual_attributes)}"
+            f"\nColour palette: {', '.join(visual_analysis.colour_palette)}"
+            f"\nImage-derived search terms: {', '.join(visual_analysis.search_terms)}"
+            "\nWhen assessing fit, explain a concrete visual connection to these cues where supported by the candidate's metadata. "
+            "Do not claim to have inspected candidate images unless their metadata supports the claim."
+        )
+        review_context = f"{review_context}{visual_context}".strip()
+
     review = await review_candidates(
         request.intent.value,
-        request.goal or "",
+        review_context,
         [_candidate_payload(work) for work in works[:30]],
         request.discovery_level,
         request.purchase_required,
@@ -537,6 +563,19 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "related_artists_found": len(qloo_artists),
         },
         "summary": intent_summary,
+        "visual_inspiration": {
+            "image_count": len(request.inspiration_images),
+            "analyzed": visual_analysis is not None,
+            "summary": visual_analysis.summary if visual_analysis else "",
+            "visual_attributes": visual_analysis.visual_attributes if visual_analysis else [],
+            "colour_palette": visual_analysis.colour_palette if visual_analysis else [],
+            "search_terms": visual_analysis.search_terms if visual_analysis else [],
+            "message": (
+                "These visible characteristics informed the search."
+                if visual_analysis
+                else ("The images were not interpreted this time; the search used your written request and saved taste." if request.inspiration_images else "")
+            ),
+        },
         "brief": {
             "intent": request.intent.value,
             "request": request.goal or "",

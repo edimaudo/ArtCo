@@ -5,8 +5,9 @@
     recent: 'artCoRecent',
     last: 'artCoLastResult',
     stateVersion: 'artCoStateVersion',
+    selectedInspiration: 'artCoSelectedInspiration',
   };
-  const STATE_VERSION = 3;
+  const STATE_VERSION = 4;
 
   const readJson = (key, fallback) => {
     try {
@@ -47,10 +48,197 @@
     recent: Array.isArray(readJson(storage.recent, [])) ? readJson(storage.recent, []).slice(0, 8) : [],
     last: readJson(storage.last, null),
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
+    inspiration: {
+      selectedIds: Array.isArray(readJson(storage.selectedInspiration, []))
+        ? readJson(storage.selectedInspiration, []).filter((id) => typeof id === 'string').slice(0, 5)
+        : [],
+      libraryOpen: false,
+    },
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const INSPIRATION_DB_NAME = 'artCoInspirationDB';
+  const INSPIRATION_STORE = 'images';
+  const MAX_REQUEST_IMAGES = 5;
+  const MAX_LIBRARY_IMAGES = 30;
+  const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+  const MAX_COMPRESSED_BYTES = 360 * 1024;
+  const activeInspirationUrls = new Set();
+  let inspirationDbPromise = null;
+
+  function openInspirationDb() {
+    if (!('indexedDB' in window)) return Promise.reject(new Error('This browser does not support local image storage.'));
+    if (inspirationDbPromise) return inspirationDbPromise;
+    inspirationDbPromise = new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(INSPIRATION_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(INSPIRATION_STORE)) {
+          const store = db.createObjectStore(INSPIRATION_STORE, { keyPath: 'id' });
+          store.createIndex('createdAt', 'createdAt', { unique: false });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => { inspirationDbPromise = null; reject(new Error('Could not open local image storage.')); };
+      request.onblocked = () => { inspirationDbPromise = null; reject(new Error('Close another ArtCo tab to finish updating local image storage.')); };
+    });
+    return inspirationDbPromise;
+  }
+
+  async function putInspirationImage(record) {
+    const db = await openInspirationDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(INSPIRATION_STORE, 'readwrite');
+      transaction.objectStore(INSPIRATION_STORE).put(record);
+      transaction.oncomplete = () => resolve(record);
+      transaction.onerror = () => reject(new Error('Could not save this image on the device.'));
+      transaction.onabort = () => reject(new Error('Saving this image was cancelled.'));
+    });
+  }
+
+  async function listInspirationImages() {
+    const db = await openInspirationDb();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(INSPIRATION_STORE, 'readonly').objectStore(INSPIRATION_STORE).getAll();
+      request.onsuccess = () => resolve((request.result || []).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))));
+      request.onerror = () => reject(new Error('Could not read saved inspiration images.'));
+    });
+  }
+
+  async function getInspirationImagesByIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) return [];
+    const all = await listInspirationImages();
+    const byId = new Map(all.map((image) => [image.id, image]));
+    return ids.map((id) => byId.get(id)).filter(Boolean);
+  }
+
+  async function deleteInspirationImage(id) {
+    const db = await openInspirationDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(INSPIRATION_STORE, 'readwrite');
+      transaction.objectStore(INSPIRATION_STORE).delete(id);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(new Error('Could not remove this image.'));
+    });
+    state.inspiration.selectedIds = state.inspiration.selectedIds.filter((item) => item !== id);
+    saveSelectedInspiration();
+  }
+
+  async function clearInspirationLibrary() {
+    const db = await openInspirationDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(INSPIRATION_STORE, 'readwrite');
+      transaction.objectStore(INSPIRATION_STORE).clear();
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(new Error('Could not clear the inspiration library.'));
+    });
+    state.inspiration.selectedIds = [];
+    saveSelectedInspiration();
+  }
+
+  async function updateInspirationNote(id, notes) {
+    const records = await listInspirationImages();
+    const record = records.find((image) => image.id === id);
+    if (!record) throw new Error('This inspiration image is no longer in the library.');
+    record.notes = String(notes || '').slice(0, 300);
+    await putInspirationImage(record);
+  }
+
+  function saveSelectedInspiration() {
+    state.inspiration.selectedIds = [...new Set(state.inspiration.selectedIds)].slice(0, MAX_REQUEST_IMAGES);
+    localStorage.setItem(storage.selectedInspiration, JSON.stringify(state.inspiration.selectedIds));
+  }
+
+  function clearInspirationObjectUrls() {
+    activeInspirationUrls.forEach((url) => URL.revokeObjectURL(url));
+    activeInspirationUrls.clear();
+  }
+
+  function imageObjectUrl(record) {
+    const url = URL.createObjectURL(record.blob);
+    activeInspirationUrls.add(url);
+    return url;
+  }
+
+  function safeImageName(value) {
+    const clean = String(value || 'Inspiration image').replace(/[\\/]+/g, ' ').trim();
+    return clean.slice(0, 120) || 'Inspiration image';
+  }
+
+  function loadImageSource(file) {
+    if (typeof window.createImageBitmap === 'function') {
+      return window.createImageBitmap(file).then((bitmap) => ({
+        image: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        cleanup: () => bitmap.close?.(),
+      }));
+    }
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => resolve({ image, width: image.naturalWidth, height: image.naturalHeight, cleanup: () => URL.revokeObjectURL(url) });
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('ArtCo could not open that image. Try a JPEG, PNG, or WebP file.')); };
+      image.src = url;
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('This browser could not prepare the image for storage.')), type, quality);
+    });
+  }
+
+  async function compressInspirationImage(file) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      throw new Error(`${safeImageName(file.name)} is not a supported format. Use JPEG, PNG, or WebP.`);
+    }
+    if (file.size > MAX_UPLOAD_BYTES) throw new Error(`${safeImageName(file.name)} is larger than 12 MB.`);
+    const source = await loadImageSource(file);
+    try {
+      if (!source.width || !source.height) throw new Error('ArtCo could not read the image dimensions.');
+      let bestBlob = null;
+      const canvas = document.createElement('canvas');
+      const maxDimensions = [1280, 1080, 900, 760];
+      const qualities = [0.82, 0.74, 0.66, 0.58, 0.5];
+      for (const edge of maxDimensions) {
+        const ratio = Math.min(1, edge / Math.max(source.width, source.height));
+        canvas.width = Math.max(1, Math.round(source.width * ratio));
+        canvas.height = Math.max(1, Math.round(source.height * ratio));
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context) throw new Error('Image processing is not available in this browser.');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(source.image, 0, 0, canvas.width, canvas.height);
+        for (const quality of qualities) {
+          const blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+          bestBlob = blob;
+          if (blob.size <= MAX_COMPRESSED_BYTES) return { blob, width: canvas.width, height: canvas.height };
+        }
+      }
+      if (!bestBlob || bestBlob.size > MAX_COMPRESSED_BYTES) {
+        throw new Error(`${safeImageName(file.name)} could not be compressed enough. Try a smaller image.`);
+      }
+      return { blob: bestBlob, width: canvas.width, height: canvas.height };
+    } finally {
+      source.cleanup?.();
+    }
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result || '');
+        const comma = value.indexOf(',');
+        if (comma < 0) reject(new Error('Could not prepare the image for visual analysis.'));
+        else resolve(value.slice(comma + 1));
+      };
+      reader.onerror = () => reject(new Error('Could not read the saved image for this request.'));
+      reader.readAsDataURL(blob);
+    });
+  }
 
   function saveProfile() {
     state.profile.updatedAt = new Date().toISOString();
@@ -142,6 +330,182 @@
       </article>`;
   }
 
+  async function renderInspirationUI() {
+    const selectedWrap = $('#selectedInspirationList');
+    const library = $('#inspirationLibrary');
+    const grid = $('#inspirationLibraryGrid');
+    if (!selectedWrap || !library || !grid) return;
+
+    clearInspirationObjectUrls();
+    let records = [];
+    try {
+      records = await listInspirationImages();
+    } catch (error) {
+      const message = $('#inspirationMessage');
+      if (message) message.textContent = error.message || 'Local image storage is unavailable.';
+      selectedWrap.innerHTML = '';
+      grid.innerHTML = '<p class="empty-state">Saved images could not be loaded in this browser.</p>';
+      return;
+    }
+
+    const idsAvailable = new Set(records.map((image) => image.id));
+    const oldCount = state.inspiration.selectedIds.length;
+    state.inspiration.selectedIds = state.inspiration.selectedIds.filter((id) => idsAvailable.has(id)).slice(0, MAX_REQUEST_IMAGES);
+    if (oldCount !== state.inspiration.selectedIds.length) saveSelectedInspiration();
+    const selected = new Set(state.inspiration.selectedIds);
+    const recordsById = new Map(records.map((image) => [image.id, image]));
+    selectedWrap.innerHTML = state.inspiration.selectedIds.map((id) => {
+      const record = recordsById.get(id);
+      if (!record) return '';
+      const url = imageObjectUrl(record);
+      return `<article class="selected-inspiration-item">
+        <img src="${escapeAttribute(url)}" alt="${escapeAttribute(record.name)}" loading="lazy" decoding="async">
+        <div class="selected-inspiration-copy"><span>${escapeHtml(record.name)}</span><button class="text-button" type="button" data-remove-selected-image="${escapeAttribute(record.id)}">Remove</button></div>
+      </article>`;
+    }).join('');
+
+    library.hidden = !state.inspiration.libraryOpen;
+    const browse = $('#browseInspiration');
+    if (browse) {
+      browse.setAttribute('aria-expanded', String(state.inspiration.libraryOpen));
+      browse.textContent = state.inspiration.libraryOpen ? 'Hide saved images' : `Choose saved images${records.length ? ` (${records.length})` : ''}`;
+      browse.disabled = records.length === 0;
+    }
+    const libraryCount = $('#inspirationLibraryCount');
+    if (libraryCount) libraryCount.textContent = `${selected.size} of ${MAX_REQUEST_IMAGES} selected`;
+    if (!records.length) {
+      grid.innerHTML = '<p class="empty-state">Your saved inspiration images will appear here.</p>';
+    } else {
+      grid.innerHTML = records.map((record) => {
+        const url = imageObjectUrl(record);
+        const checked = selected.has(record.id);
+        const disabled = !checked && selected.size >= MAX_REQUEST_IMAGES;
+        return `<label class="inspiration-library-card${checked ? ' is-selected' : ''}" for="inspiration-choice-${escapeAttribute(record.id)}">
+          <img src="${escapeAttribute(url)}" alt="" loading="lazy" decoding="async">
+          <span class="inspiration-library-card-copy"><input id="inspiration-choice-${escapeAttribute(record.id)}" type="checkbox" data-toggle-inspiration="${escapeAttribute(record.id)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${escapeHtml(record.name)}</span></span>
+          <span class="inspiration-card-date">Added ${escapeHtml(new Date(record.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span>
+        </label>`;
+      }).join('');
+    }
+    const message = $('#inspirationMessage');
+    if (message && !message.textContent) {
+      message.textContent = records.length >= MAX_LIBRARY_IMAGES
+        ? `Your local library holds ${MAX_LIBRARY_IMAGES} images. Remove one before adding another.`
+        : '';
+    }
+  }
+
+  async function renderInspirationGallery() {
+    const gallery = $('#tasteInspirationGallery');
+    const empty = $('#tasteInspirationEmpty');
+    if (!gallery) return;
+    clearInspirationObjectUrls();
+    try {
+      const records = await listInspirationImages();
+      const clearButton = $('#clearInspirationLibrary');
+      if (clearButton) clearButton.disabled = records.length === 0;
+      if (!records.length) {
+        gallery.innerHTML = '';
+        if (empty) empty.hidden = false;
+        return;
+      }
+      if (empty) empty.hidden = true;
+      gallery.innerHTML = records.map((record) => {
+        const url = imageObjectUrl(record);
+        return `<article class="inspiration-gallery-card">
+          <img src="${escapeAttribute(url)}" alt="${escapeAttribute(record.name)}" loading="lazy" decoding="async">
+          <div class="inspiration-gallery-copy"><strong title="${escapeAttribute(record.name)}">${escapeHtml(record.name)}</strong><span>Added ${escapeHtml(new Date(record.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</span></div>
+          <label class="inspiration-notes-label" for="inspiration-notes-${escapeAttribute(record.id)}">What do you like about it?</label>
+          <textarea class="inspiration-gallery-notes" id="inspiration-notes-${escapeAttribute(record.id)}" data-inspiration-notes="${escapeAttribute(record.id)}" rows="2" maxlength="300" aria-describedby="inspiration-note-status-${escapeAttribute(record.id)}" placeholder="Colours, mood, shapes, or something else…">${escapeHtml(record.notes || '')}</textarea>
+          <p class="inspiration-note-status" id="inspiration-note-status-${escapeAttribute(record.id)}" role="status" aria-live="polite"></p>
+          <div class="inspiration-gallery-actions">
+            <button class="secondary-button" type="button" data-use-inspiration="${escapeAttribute(record.id)}">Use in a request</button>
+            <button class="text-button" type="button" data-delete-inspiration="${escapeAttribute(record.id)}">Remove</button>
+          </div>
+        </article>`;
+      }).join('');
+    } catch (error) {
+      gallery.innerHTML = `<p class="empty-state">${escapeHtml(error.message || 'Could not load local inspiration images.')}</p>`;
+      if (empty) empty.hidden = true;
+    }
+  }
+
+  async function handleInspirationUpload(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    const status = $('#inspirationMessage');
+    const errors = [];
+    let savedCount = 0;
+    const selectedBeforeUpload = state.inspiration.selectedIds.length;
+    try {
+      let existing = await listInspirationImages();
+      if (existing.length >= MAX_LIBRARY_IMAGES) {
+        throw new Error(`Your local library holds ${MAX_LIBRARY_IMAGES} images. Remove one before adding another.`);
+      }
+      for (const file of files) {
+        existing = await listInspirationImages();
+        if (existing.length >= MAX_LIBRARY_IMAGES) {
+          errors.push(`Only ${MAX_LIBRARY_IMAGES} images can be kept in this browser. Remaining files were not saved.`);
+          break;
+        }
+        try {
+          if (status) status.textContent = `Preparing ${safeImageName(file.name)}…`;
+          const compressed = await compressInspirationImage(file);
+          const record = {
+            id: (window.crypto && typeof window.crypto.randomUUID === 'function') ? window.crypto.randomUUID() : `inspiration-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            name: safeImageName(file.name),
+            mimeType: 'image/jpeg',
+            blob: compressed.blob,
+            width: compressed.width,
+            height: compressed.height,
+            bytes: compressed.blob.size,
+            createdAt: new Date().toISOString(),
+            notes: '',
+          };
+          await putInspirationImage(record);
+          savedCount += 1;
+          if (state.inspiration.selectedIds.length < MAX_REQUEST_IMAGES) {
+            state.inspiration.selectedIds.push(record.id);
+            saveSelectedInspiration();
+          }
+        } catch (error) {
+          errors.push(error.message || `${safeImageName(file.name)} could not be saved.`);
+        }
+      }
+      await renderInspirationUI();
+      await renderInspirationGallery();
+      if (status) {
+        const attachedCount = state.inspiration.selectedIds.length;
+        const newlySelectedCount = Math.max(0, attachedCount - selectedBeforeUpload);
+        const savedToLibraryOnly = Math.max(0, savedCount - newlySelectedCount);
+        const successText = savedCount
+          ? `${savedCount} image${savedCount === 1 ? '' : 's'} saved. ${attachedCount} of ${MAX_REQUEST_IMAGES} selected for this request.${savedToLibraryOnly ? ` ${savedToLibraryOnly} additional image${savedToLibraryOnly === 1 ? '' : 's'} saved to your library for later.` : ''}`
+          : '';
+        status.textContent = [successText, ...errors].filter(Boolean).join(' ');
+      }
+    } catch (error) {
+      if (status) status.textContent = error.message || 'Images could not be saved in this browser.';
+    }
+  }
+
+  async function toggleInspirationSelection(id, shouldSelect) {
+    if (shouldSelect) {
+      if (state.inspiration.selectedIds.includes(id)) return;
+      if (state.inspiration.selectedIds.length >= MAX_REQUEST_IMAGES) {
+        const status = $('#inspirationMessage');
+        if (status) status.textContent = `Choose up to ${MAX_REQUEST_IMAGES} images for each request.`;
+        return;
+      }
+      state.inspiration.selectedIds.push(id);
+    } else {
+      state.inspiration.selectedIds = state.inspiration.selectedIds.filter((item) => item !== id);
+    }
+    saveSelectedInspiration();
+    const status = $('#inspirationMessage');
+    if (status) status.textContent = `${state.inspiration.selectedIds.length} of ${MAX_REQUEST_IMAGES} images selected for this request.`;
+    await renderInspirationUI();
+  }
+
   function renderDashboard() {
     const recent = $('#dashboardRecent');
     const saved = $('#dashboardSaved');
@@ -203,22 +567,26 @@
 
   function intentCopy(intent) {
     return {
-      discover: ['What are you looking for?', 'Start with what you love, then let me take the search somewhere new.'],
-      find: ['What are you looking for?', 'Tell me what you have in mind. I’ll narrow the search around it.'],
-      taste: ['What are you curious about?', 'Give me a few cultural references and I’ll use them to open up new directions.'],
-      curate: ['What should work together?', 'Tell me about the space, mood, or idea you want to bring together.'],
-      buy: ['What would you like to buy?', 'Tell me what you can spend, where you are, and how far you want me to explore.'],
-      learn: ['What would you like to understand?', 'Ask about an artist, artwork, movement, or idea and I’ll research it for you.'],
-    }[intent] || ['What are you looking for?', 'Start naturally and I’ll take it from there.'];
+      discover: ['What are you looking for?', 'Start with what you love, then let ArtCo take the search somewhere new.', 'I love punk music and bold patterns. Find art with a similar energy, but take me somewhere unexpected.'],
+      find: ['What are you looking for?', 'Describe the artist, artwork, style, or visual detail you want to find.', 'Find an artist or artwork with this style, colour palette, or subject.'],
+      taste: ['What are you curious about?', 'Explore what draws you to certain art, and discover new directions from there.', 'Help me understand why I am drawn to bold patterns, expressive colour, and unusual textures.'],
+      curate: ['What should work together?', 'Describe the space, mood, or idea you want the works to share.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
+      buy: ['What would you like to buy?', 'Share your budget, location, or the kind of work you hope to acquire.', 'Find original art under $500 that I can buy in Canada, with bold colour and geometric forms.'],
+      learn: ['What would you like to understand?', 'Ask about an artist, artwork, movement, or idea.', 'Explain abstract expressionism in plain language and show me works that help illustrate it.'],
+    }[intent] || ['What are you looking for?', 'Start with what you love, then let ArtCo take the search somewhere new.', 'Tell me what you are looking for.'];
   }
 
   function setIntent(intent) {
     state.intent = intent;
-    const [title, lede] = intentCopy(intent);
+    const [, , placeholder] = intentCopy(intent);
     const titleNode = $('#conciergeTitle');
     const ledeNode = $('#conciergeLede');
-    if (titleNode) titleNode.textContent = title;
-    if (ledeNode) ledeNode.textContent = lede;
+    const input = $('#requestInput');
+    const hint = $('#requestHint');
+    if (titleNode) titleNode.textContent = 'Your art concierge';
+    if (ledeNode) ledeNode.textContent = 'Select a service, then describe what you need.';
+    if (input) input.placeholder = placeholder;
+    if (hint) hint.textContent = 'Add as much or as little detail as you like.';
   }
 
   function addProfileReference(value) {
@@ -286,20 +654,22 @@
       goal: prompt.trim() || null,
       number_of_works: inferred === 'curate' ? 3 : 1,
       feedback,
+      inspiration_image_ids: [...state.inspiration.selectedIds].slice(0, MAX_REQUEST_IMAGES),
     };
   }
 
   function beginRequest(prompt) {
     const clean = String(prompt || '').trim();
-    if (!clean) {
+    if (!clean && state.inspiration.selectedIds.length === 0) {
       const input = $('#requestInput');
       if (input) {
-        input.setCustomValidity('Tell your concierge what you would like help with.');
+        input.setCustomValidity('Add a short description or at least one inspiration image.');
         input.reportValidity();
         input.focus();
       }
       return;
     }
+    $('#requestInput')?.setCustomValidity('');
     const params = new URLSearchParams(window.location.search);
     const inferred = params.has('intent') ? state.intent : inferIntent(clean);
     const request = buildRequest(clean, null, inferred);
@@ -312,6 +682,8 @@
     } catch (error) {
       localStorage.setItem('artConciergePendingRequest', serialized);
     }
+    state.inspiration.selectedIds = [];
+    saveSelectedInspiration();
     window.location.assign(`/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`);
   }
 
@@ -339,11 +711,36 @@
     grid.innerHTML = '<p class="empty-state">Searching and narrowing the field…</p>';
     notForSaleSection.hidden = true;
 
+    const requestNotices = [];
     try {
+      const apiPayload = { ...payload, inspiration_images: [] };
+      const requestedImageIds = Array.isArray(payload.inspiration_image_ids) ? payload.inspiration_image_ids.slice(0, MAX_REQUEST_IMAGES) : [];
+      if (requestedImageIds.length) {
+        try {
+          const imageRecords = await getInspirationImagesByIds(requestedImageIds);
+          for (const record of imageRecords) {
+            apiPayload.inspiration_images.push({
+              image_id: record.id,
+              name: record.name,
+              notes: record.notes || '',
+              mime_type: record.mimeType || record.blob.type || 'image/jpeg',
+              data: await blobToBase64(record.blob),
+            });
+          }
+          apiPayload.inspiration_image_ids = imageRecords.map((record) => record.id);
+          if (imageRecords.length < requestedImageIds.length) {
+            requestNotices.push('Some saved inspiration images were unavailable in this browser. The search continued with the images it could load.');
+          }
+        } catch (imageError) {
+          requestNotices.push('ArtCo could not load the saved images. This search used your written request and saved taste instead.');
+          apiPayload.inspiration_image_ids = [];
+          apiPayload.inspiration_images = [];
+        }
+      }
       const response = await fetch('/api/concierge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(apiPayload),
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => null);
@@ -354,6 +751,10 @@
       saveLastResult(data);
       saveRecent(payload, data);
       renderResults(data);
+      if (requestNotices.length) {
+        const summary = $('#resultsSummary');
+        if (summary) summary.textContent = `${summary.textContent} ${requestNotices.join(' ')}`;
+      }
       return true;
     } catch (error) {
       resultsHeading.textContent = 'I couldn’t complete that search.';
@@ -473,7 +874,22 @@
         ? 'Additional works related to your brief, but not currently available to acquire.'
         : 'Additional works from museum and institutional collections. These are not available for purchase.';
     }
+    renderVisualInspirationSummary(data.visual_inspiration || {});
     renderTasteSummary(data);
+  }
+
+  function renderVisualInspirationSummary(inspiration) {
+    const panel = $('#visualInspirationSummary');
+    if (!panel) return;
+    const count = Number(inspiration.image_count || 0);
+    if (!count) { panel.hidden = true; panel.innerHTML = ''; return; }
+    panel.hidden = false;
+    const heading = inspiration.analyzed ? 'How your images guided the search' : 'Your images were received';
+    const detail = inspiration.analyzed
+      ? (inspiration.summary || 'ArtCo used the visual characteristics in your images to guide the artwork search.')
+      : (inspiration.message || 'Visual analysis was unavailable, so this search used your written request and saved taste.');
+    const tags = [...new Set([...(inspiration.visual_attributes || []), ...(inspiration.colour_palette || [])])].slice(0, 8);
+    panel.innerHTML = `<div class="visual-inspiration-result-copy"><strong>${escapeHtml(heading)}</strong><p>${escapeHtml(detail)}</p></div>${tags.length ? `<div class="visual-inspiration-result-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}`;
   }
 
   function getArtworkById(id) {
@@ -555,6 +971,53 @@
 
   function handleGlobalClicks() {
     document.addEventListener('click', (event) => {
+      const browse = event.target.closest('#browseInspiration');
+      if (browse) {
+        state.inspiration.libraryOpen = !state.inspiration.libraryOpen;
+        renderInspirationUI();
+        return;
+      }
+
+      const removeSelectedImage = event.target.closest('[data-remove-selected-image]');
+      if (removeSelectedImage) {
+        state.inspiration.selectedIds = state.inspiration.selectedIds.filter((id) => id !== removeSelectedImage.dataset.removeSelectedImage);
+        saveSelectedInspiration();
+        renderInspirationUI();
+        return;
+      }
+
+      const deleteInspiration = event.target.closest('[data-delete-inspiration]');
+      if (deleteInspiration) {
+        deleteInspirationImage(deleteInspiration.dataset.deleteInspiration)
+          .then(() => Promise.all([renderInspirationUI(), renderInspirationGallery()]))
+          .catch((error) => {
+            const status = $('#inspirationMessage');
+            if (status) status.textContent = error.message || 'Could not remove this image.';
+          });
+        return;
+      }
+
+      const clearAllInspiration = event.target.closest('#clearInspirationLibrary');
+      if (clearAllInspiration) {
+        if (window.confirm('Remove all saved inspiration images from this browser? This cannot be undone.')) {
+          clearInspirationLibrary()
+            .then(() => Promise.all([renderInspirationUI(), renderInspirationGallery()]))
+            .catch((error) => {
+              const status = $('#inspirationMessage');
+              if (status) status.textContent = error.message || 'Could not clear the inspiration library.';
+            });
+        }
+        return;
+      }
+
+      const useInspiration = event.target.closest('[data-use-inspiration]');
+      if (useInspiration) {
+        state.inspiration.selectedIds = [useInspiration.dataset.useInspiration];
+        saveSelectedInspiration();
+        window.location.href = `/concierge?intent=discover&useImage=${encodeURIComponent(useInspiration.dataset.useInspiration)}`;
+        return;
+      }
+
       const save = event.target.closest('.save-action');
       if (save) { toggleSave(save.dataset.id); return; }
 
@@ -605,26 +1068,59 @@
         renderTastePage();
       }
     });
+    document.addEventListener('change', (event) => {
+      const notesInput = event.target.closest('[data-inspiration-notes]');
+      if (notesInput) {
+        const status = $(`#inspiration-note-status-${CSS.escape(notesInput.dataset.inspirationNotes)}`);
+        if (status) status.textContent = 'Saving…';
+        updateInspirationNote(notesInput.dataset.inspirationNotes, notesInput.value)
+          .then(() => { if (status) status.textContent = 'Saved'; })
+          .catch((error) => { if (status) status.textContent = error.message || 'Could not save note.'; });
+        return;
+      }
+      const choice = event.target.closest('[data-toggle-inspiration]');
+      if (!choice) return;
+      toggleInspirationSelection(choice.dataset.toggleInspiration, choice.checked);
+    });
   }
 
   function initHome() { renderHome(); }
   function initDashboard() {
     renderDashboard();
     initTasteEditor();
+    renderInspirationGallery();
   }
 
   function initConcierge() {
+    const params = new URLSearchParams(window.location.search);
+    const useImageId = params.get('useImage');
+    if (useImageId) {
+      state.inspiration.selectedIds = [useImageId];
+      saveSelectedInspiration();
+    }
     setIntent(state.intent);
     const serviceSelect = $('#serviceSelect');
     if (serviceSelect) serviceSelect.value = state.intent;
+    renderInspirationUI();
+    $('#inspirationFiles')?.addEventListener('change', (event) => {
+      handleInspirationUpload(event.target.files);
+      event.target.value = '';
+    });
 
-    const resume = new URLSearchParams(window.location.search).get('resume');
+    const resume = params.get('resume');
     if (resume === '1') {
       try {
         const request = readJson('artCoResumeRequest', null);
         if (request?.goal) {
           const input = $('#requestInput');
           if (input) input.value = request.goal;
+        }
+        if (Array.isArray(request?.inspiration_image_ids)) {
+          state.inspiration.selectedIds = request.inspiration_image_ids.slice(0, MAX_REQUEST_IMAGES);
+          saveSelectedInspiration();
+          renderInspirationUI();
+        }
+        if (request?.goal) {
           const history = $('#conversationHistory');
           if (history) {
             history.innerHTML = `<div class="conversation-entry"><p class="label">Previous request</p><p>${escapeHtml(request.goal)}</p></div><div class="conversation-entry"><p class="label">Continue from here</p><p>Refine the request, add a preference, or ask me to take it in a new direction.</p></div>`;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -25,6 +26,15 @@ class RequestSignals(BaseModel):
     budget_min: float | None = None
     budget_max: float | None = None
     number_of_works: int | None = Field(default=None, ge=1, le=8)
+
+
+class VisualAnalysis(BaseModel):
+    """Concise, search-oriented interpretation of user-supplied inspiration."""
+
+    summary: str = Field(default="", max_length=420)
+    visual_attributes: list[str] = Field(default_factory=list, max_length=10)
+    colour_palette: list[str] = Field(default_factory=list, max_length=8)
+    search_terms: list[str] = Field(default_factory=list, max_length=8)
 
 
 class SearchPlan(BaseModel):
@@ -90,6 +100,56 @@ async def _generate_structured(model: type[T], prompt: str) -> T | None:
         return model.model_validate(payload)
     except Exception as exc:
         logger.warning("Gemini structured generation failed (%s); using deterministic fallback", type(exc).__name__)
+        return None
+
+
+async def analyze_inspiration_images(request_text: str, images: list[Any]) -> VisualAnalysis | None:
+    """Use Gemini vision to extract visual clues without identifying people or guessing provenance."""
+    if not images or not GEMINI_API_KEY:
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        user_image_notes = [
+            {"image": image.name, "note": image.notes}
+            for image in images[:5]
+            if getattr(image, "notes", "").strip()
+        ]
+        parts: list[Any] = [types.Part.from_text(text=f"""
+You are a visual research assistant for ArtCo, a personal art concierge.
+Interpret these user-provided inspiration images to help search for artworks.
+Describe visible visual traits only: composition, palette, shapes, texture, subject,
+mood, medium clues, and broad artistic styles. Do not identify people, infer sensitive
+personal traits, claim authorship, or state that an image is a specific artwork unless
+that is unambiguously established by visible information. Prefer concise, searchable
+art terms rather than long prose. Do not simply repeat the user's request.
+User's written request: {request_text or '(No written description supplied)'}
+User notes for some images (preference context only): {user_image_notes}
+Return JSON with summary, visual_attributes (up to 10 short phrases), colour_palette
+(up to 8 short terms), and search_terms (up to 8 art-catalogue-friendly queries).
+""".strip())]
+        for image in images[:5]:
+            data = base64.b64decode(image.data, validate=True)
+            parts.append(types.Part.from_bytes(data=data, mime_type=image.mime_type))
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=VisualAnalysis,
+                temperature=0.2,
+            ),
+        )
+        payload = _extract_json_object(getattr(response, "text", "") or "")
+        if payload is None:
+            return None
+        return VisualAnalysis.model_validate(payload)
+    except Exception as exc:
+        logger.warning("Inspiration image analysis failed (%s); continuing with text-only search", type(exc).__name__)
         return None
 
 

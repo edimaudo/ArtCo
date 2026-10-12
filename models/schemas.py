@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Intent(str, Enum):
@@ -12,6 +15,29 @@ class Intent(str, Enum):
     curate = "curate"
     buy = "buy"
     learn = "learn"
+
+
+class InspirationImage(BaseModel):
+    """A compressed image sent only with the request that uses it."""
+
+    image_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(default="Inspiration image", max_length=160)
+    notes: str = Field(default="", max_length=300)
+    mime_type: Literal["image/jpeg", "image/png", "image/webp"]
+    data: str = Field(min_length=32, max_length=500_000)
+
+    @field_validator("data")
+    @classmethod
+    def validate_encoded_image(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("Image data must be valid base64.") from exc
+        if len(decoded) > 360 * 1024:
+            raise ValueError("Each inspiration image must be 360 KB or smaller after compression.")
+        if len(decoded) < 16:
+            raise ValueError("The uploaded image is too small to process.")
+        return value
 
 
 class ConciergeRequest(BaseModel):
@@ -31,6 +57,8 @@ class ConciergeRequest(BaseModel):
     goal: str | None = Field(default=None, max_length=500)
     number_of_works: int = Field(default=1, ge=1, le=8)
     feedback: str | None = Field(default=None, max_length=500)
+    inspiration_image_ids: list[str] = Field(default_factory=list, max_length=5)
+    inspiration_images: list[InspirationImage] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="after")
     def validate_request(self) -> "ConciergeRequest":
@@ -38,4 +66,9 @@ class ConciergeRequest(BaseModel):
             raise ValueError("budget_min must be less than or equal to budget_max")
         if self.intent is Intent.buy:
             self.purchase_required = True
+        image_ids = [item.image_id for item in self.inspiration_images]
+        if len(image_ids) != len(set(image_ids)):
+            raise ValueError("Each inspiration image must have a unique ID.")
+        if self.inspiration_image_ids and any(image_id not in self.inspiration_image_ids for image_id in image_ids):
+            raise ValueError("Submitted images must match the selected inspiration images.")
         return self
