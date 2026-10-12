@@ -7,6 +7,7 @@ from typing import Any
 
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
+from .image_proxy import display_image_url
 from .llm import CandidateReview, analyze_inspiration_images, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
@@ -639,6 +640,7 @@ def _serialize(
         "title": work.title,
         "artist": work.artist,
         "image_url": _normalise_image_url(work.image_url),
+        "display_image_url": display_image_url(_normalise_image_url(work.image_url)),
         "detail_url": work.detail_url,
         "source": work.source,
         "source_kind": work.source_kind,

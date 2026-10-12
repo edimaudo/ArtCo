@@ -4,15 +4,20 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+import httpx
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from models.schemas import ConciergeRequest
 from services.concierge import run
 from services.payments import PaymentUnavailable, PaymentConfigurationError, create_checkout_session, parse_webhook, verify_webhook_signature
+from services.image_proxy import is_allowed_image_url
+from services.config import REQUEST_TIMEOUT
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
@@ -20,7 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="ArtCo | Your personal art concierge",
     description="ArtCo is a personal art concierge for cultural discovery, artwork research, curation and acquisition.",
-    version="0.3.0",
+    version="0.4.0",
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -99,6 +104,70 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             "completed_at": session.get("created"),
         }
     return JSONResponse({"success": True, "received": True})
+
+
+MAX_PROXY_IMAGE_BYTES = 8 * 1024 * 1024
+_PROXY_REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+@app.get("/api/artwork-image")
+async def proxy_artwork_image(url: str) -> Response:
+    """Serve approved public art thumbnails same-origin when browser hotlinking fails.
+
+    Every redirect is revalidated against an allowlist. Arbitrary hosts, non-HTTPS
+    URLs, non-image responses, and oversized responses are rejected.
+    """
+    if not is_allowed_image_url(url):
+        raise HTTPException(status_code=400, detail="This image source is not supported by the ArtCo image proxy.")
+
+    current_url = url
+    headers = {
+        "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+        "User-Agent": "ArtCoArtworkImageProxy/1.0",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
+            for _ in range(4):
+                async with client.stream("GET", current_url, headers=headers) as upstream:
+                    if upstream.status_code in _PROXY_REDIRECT_CODES:
+                        location = upstream.headers.get("location")
+                        if not location:
+                            raise HTTPException(status_code=502, detail="The image provider returned an invalid redirect.")
+                        next_url = urljoin(current_url, location)
+                        if not is_allowed_image_url(next_url):
+                            raise HTTPException(status_code=502, detail="The image provider redirected to an unsupported host.")
+                        current_url = next_url
+                        continue
+                    if upstream.status_code != 200:
+                        raise HTTPException(status_code=502, detail="The image provider could not return this artwork image.")
+                    content_type = upstream.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if not content_type.startswith("image/"):
+                        raise HTTPException(status_code=502, detail="The image provider returned a non-image response.")
+                    declared_size = upstream.headers.get("content-length")
+                    if declared_size and declared_size.isdigit() and int(declared_size) > MAX_PROXY_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail="The artwork image is too large to display.")
+                    chunks: list[bytes] = []
+                    total_size = 0
+                    async for chunk in upstream.aiter_bytes():
+                        total_size += len(chunk)
+                        if total_size > MAX_PROXY_IMAGE_BYTES:
+                            raise HTTPException(status_code=413, detail="The artwork image is too large to display.")
+                        chunks.append(chunk)
+                    return Response(
+                        content=b"".join(chunks),
+                        media_type=content_type,
+                        headers={
+                            "Cache-Control": "public, max-age=86400",
+                            "X-Content-Type-Options": "nosniff",
+                            "Content-Disposition": "inline",
+                        },
+                    )
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, TimeoutError) as exc:
+        logger.info("Artwork image proxy failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="The artwork image is temporarily unavailable.") from exc
+    raise HTTPException(status_code=502, detail="The image provider redirected too many times.")
 
 
 @app.get("/health")

@@ -781,13 +781,21 @@
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
       image.addEventListener('error', () => {
+        // Try the provider's direct URL once if the same-origin proxy failed.
+        // This retains support for providers outside the proxy allowlist.
+        const originalSrc = image.dataset.originalSrc;
+        if (originalSrc) {
+          delete image.dataset.originalSrc;
+          image.src = originalSrc;
+          return;
+        }
         const placeholder = document.createElement('div');
         placeholder.className = 'art-placeholder';
         placeholder.textContent = 'Image temporarily unavailable';
         placeholder.setAttribute('role', 'img');
         placeholder.setAttribute('aria-label', 'Artwork image temporarily unavailable');
         image.replaceWith(placeholder);
-      }, { once: true });
+      });
     });
   }
 
@@ -795,8 +803,9 @@
     const available = work.availability === 'available' && work.source_kind === 'commercial';
     const availability = available ? 'available' : 'not_for_sale';
     const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
-    const image = work.image_url
-      ? `<img data-artwork-image src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
+    const imageDisplayUrl = work.display_image_url || work.image_url;
+    const image = imageDisplayUrl
+      ? `<img data-artwork-image ${work.display_image_url && work.display_image_url !== work.image_url ? `data-original-src="${escapeAttribute(work.image_url || '')}"` : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
       : '<div class="art-placeholder">Image unavailable</div>';
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
