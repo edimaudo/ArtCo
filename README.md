@@ -1,7 +1,7 @@
 # ArtCo 
 
-## Product Design
-A user-centric art concierge that combines broader cultural taste signals from Qloo with artwork research across commercial and institutional sources.
+## Overvier
+A user-centric art concierge that combines broader cultural taste .
 
 ## The concierge roles
 
@@ -12,9 +12,6 @@ A user-centric art concierge that combines broader cultural taste signals from Q
 - **Buy**: prioritize artwork that is actually available to acquire.
 - **Learn about art**: understand an artist, artwork, movement, or idea.
 
-## Architecture
-
-The application uses a **native Python orchestration layer** with explicit tool-like service boundaries. 
 
 The concierge loop is:
 
