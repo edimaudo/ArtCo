@@ -561,7 +561,7 @@
         const id = escapeAttribute(work.id);
         const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url);
         const image = savedImageUrl
-          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin">`
           : '<div class="saved-thumb no-image">Preview unavailable</div>';
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
@@ -818,20 +818,20 @@
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
       image.addEventListener('error', () => {
-        // Try the direct image URL first when the same-origin proxy failed.
-        const originalSrc = image.dataset.originalSrc;
-        if (originalSrc) {
-          delete image.dataset.originalSrc;
-          image.src = originalSrc;
-          return;
-        }
-        // A collection page may have a working primary image even when its API
-        // omits the thumbnail URL or serves a stale thumbnail. Resolve og:image
-        // from the known collection page before giving up.
+        // The public collection page often has a working image even when the
+        // API thumbnail is stale or the image CDN blocks hotlinking. Ask the
+        // same-origin preview endpoint first, then try the direct URL as a last
+        // fallback. This avoids immediately repeating a blocked CDN request.
         const detailUrl = image.dataset.detailUrl;
         if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
           image.dataset.triedDetailPreview = 'true';
           image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
+          return;
+        }
+        const originalSrc = image.dataset.originalSrc;
+        if (originalSrc && image.dataset.triedOriginalSrc !== 'true') {
+          image.dataset.triedOriginalSrc = 'true';
+          image.src = originalSrc;
           return;
         }
         const placeholder = document.createElement('div');
@@ -857,7 +857,7 @@
     const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl;
     const previewIsInitial = Boolean(pagePreviewUrl && imageDisplayUrl === pagePreviewUrl);
     const image = imageDisplayUrl
-      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin">`
       : '<div class="art-placeholder">Preview unavailable</div>';
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';

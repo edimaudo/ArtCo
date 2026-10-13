@@ -680,6 +680,16 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 64px;
+  align-items: start;
+}
+.taste-editor-grid .taste-profile-column {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 3.2em auto;
+  align-content: start;
+}
+.taste-editor-grid .taste-profile-column h3 {
+  margin: 0;
 }
 .taste-editor-lower {
   margin-top: 48px;
@@ -702,6 +712,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   line-height: 1.6;
   max-width: 540px;
   height: 3.2em;
+  min-height: 3.2em;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -785,15 +796,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   font-weight: 600;
 }
 .concierge-service-control select {
-  width: min(100%, 210px);
-  min-height: 44px;
-  padding: 0 34px 0 12px;
-  font-size: .92rem;
+  width: min(100%, 185px);
+  min-height: 42px;
+  padding: 0 30px 0 11px;
+  font-size: .9rem;
 }
 
 @media (max-width: 600px) {
   .concierge-service-control select {
-    width: min(100%, 210px);
+    width: min(100%, 185px);
   }
 }
 

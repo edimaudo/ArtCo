@@ -101,10 +101,17 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     js = (root / "static/js/app.js").read_text()
     css = (root / "static/css/style.css").read_text()
     agent = (root / "services/agent.py").read_text()
+    concierge = (root / "templates/concierge.html").read_text()
     assert "(data.results || []).slice(0, 3)" in js
     assert "(data.not_for_sale || []).slice(0, 3)" in js
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css
     assert "primary = selected[:3]" in agent
+    assert "width: min(100%, 185px)" in css
+    assert "Images are stored in this browser" not in concierge
+    assert "Optional · Up to 5 per request" not in concierge
+    assert 'referrerpolicy="no-referrer"' not in js
+    assert "const detailUrl = image.dataset.detailUrl" in js
+    assert "const originalSrc = image.dataset.originalSrc" in js
 
 
 def test_inspiration_selected_ids_are_not_persisted_to_localstorage():
