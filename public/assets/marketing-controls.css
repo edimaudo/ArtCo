@@ -1,0 +1,38 @@
+/* Shared display controls for the landing and authentication pages. */
+.site-display-controls,
+.auth-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.site-display-controls .font-control { gap: 3px; padding: 3px; }
+.site-display-controls .font-control > span { padding: 0 5px; }
+.site-display-controls .font-control button { width: 29px; height: 30px; }
+.site-display-controls .icon-control { min-height: 39px; white-space: nowrap; }
+.marketing-nav { gap: 21px; }
+.marketing-nav .site-display-controls { gap: 7px; }
+.marketing-nav .font-control { background: var(--surface); }
+.marketing-nav .font-control button[aria-pressed="true"] { color: #fff; background: var(--blue); }
+html[data-theme="dark"] .marketing-nav .font-control button[aria-pressed="true"] { color: #10213c; }
+.marketing-footer { display: none; }
+
+@media (max-width: 1040px) {
+  .marketing-header { width: calc(100% - 36px); }
+  .marketing-nav { gap: 12px; }
+  .site-display-controls { gap: 6px; }
+  .site-display-controls .theme-label { display: none; }
+  .auth-header-right { gap: 13px; }
+}
+@media (max-width: 760px) {
+  .marketing-header { height: auto; min-height: 70px; align-items: center; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
+  .marketing-nav { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .marketing-nav > a:not(.button) { display: none; }
+  .marketing-nav .site-display-controls { margin-right: auto; }
+  .auth-header-right { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+  .auth-header-right .back-link { display: none; }
+}
+@media (max-width: 420px) {
+  .marketing-header { width: calc(100% - 28px); }
+  .site-display-controls .font-control > span { display: none; }
+  .site-display-controls .icon-control { padding: 7px 9px; }
+}

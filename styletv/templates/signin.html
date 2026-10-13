@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-font-size="medium">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — styleTV</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/marketing-controls.css">
+  <script defer src="/assets/site-settings.js"></script>
+</head>
+<body class="auth-body">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="marketing-header auth-header">
+    <a class="brand" href="/" aria-label="styleTV home"><span class="brand-mark">s<span>t</span></span><span>styleTV</span></a>
+    <div class="auth-header-right">
+      <div class="site-display-controls" aria-label="Display settings">
+        <div class="font-control" role="group" aria-label="Text size">
+          <span>Text</span><button type="button" data-font="small" aria-label="Small text" aria-pressed="false">A</button><button type="button" data-font="medium" aria-label="Medium text" aria-pressed="true">A</button><button type="button" data-font="large" aria-label="Large text" aria-pressed="false">A</button>
+        </div>
+        <button type="button" class="icon-control theme-toggle" aria-label="Switch to dark mode" title="Switch colour theme"><span aria-hidden="true">◐</span><span class="theme-label">Dark mode</span></button>
+      </div>
+      <a class="back-link" href="/">Back to home</a>
+    </div>
+  </header>
+  <main id="main" class="auth-layout">
+    <section class="auth-side">
+      <div class="auth-art-image"><img src="https://images.pexels.com/photos/9929701/pexels-photo-9929701.jpeg?cs=srgb&dl=pexels-maksgelatin-9929701.jpg&fm=jpg" alt="Plaid jacket and layered street-style inspiration"></div>
+      <div class="auth-side-copy"><h1>Find the outfits<br>that feel like you.</h1><p>Pick the shows you love. Explore the looks. Keep changing your mind.</p></div>
+    </section>
+    <section class="auth-form-panel">
+      <div class="auth-form-wrap">
+        <h2>Welcome back.</h2>
+        <p class="auth-intro">Sign in to continue with your style profile and saved looks on this browser.</p>
+        {% if error == 'invalid' %}<div class="form-alert" role="alert">Those demo credentials didn't match. Check the details below and try again.</div>
+        {% elif error == 'expired' %}<div class="form-alert" role="alert">Your session expired. Please try signing in again.</div>{% endif %}
+        <form action="/signin" method="post" class="auth-form">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="username" value="demo@styletv.app" required>
+          <label for="password">Password</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" value="styleTV2026" required><button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">Show</button></div>
+          <button type="submit" class="button button-primary button-large button-full">Sign in to styleTV <span aria-hidden="true">→</span></button>
+        </form>
+        <div class="demo-credentials"><span class="demo-info-icon" aria-hidden="true">i</span><div><strong>Demo account</strong><p>Email: <code>demo@styletv.app</code><br>Password: <code>styleTV2026</code></p></div></div>
+        <p class="privacy-note">This is a demo sign-in, not production account security. Your profile and saved looks are stored in IndexedDB in this browser. Photos are not saved in IndexedDB.</p>
+      </div>
+    </section>
+  </main>
+  <script>
+    document.querySelector('.password-toggle')?.addEventListener('click', function () {
+      const input = document.getElementById('password');
+      const visible = input.type === 'password';
+      input.type = visible ? 'text' : 'password';
+      this.textContent = visible ? 'Hide' : 'Show';
+      this.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+      this.setAttribute('aria-pressed', String(visible));
+    });
+  </script>
+</body>
+</html>
