@@ -64,7 +64,7 @@ class ArtInstituteProvider:
             payload = response.json()
         iiif = payload.get("config", {}).get("iiif_url", "https://www.artic.edu/iiif/2")
         output = [self._map(item, iiif) for item in payload.get("data", [])]
-        return [work for work in output if _usable_image_url(work.image_url)][:limit]
+        return [work for work in output if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")][:limit]
 
     def _map(self, item: dict[str, Any], iiif: str) -> Artwork:
         image_id = item.get("image_id")
@@ -114,7 +114,7 @@ class MetProvider:
                 work = self._map(result.json())
             except (TypeError, ValueError):
                 continue
-            if _usable_image_url(work.image_url):
+            if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or ""):
                 output.append(work)
         return output[:limit]
 
@@ -147,7 +147,7 @@ class ClevelandProvider:
             response.raise_for_status()
             payload = response.json()
         output = [self._map(item) for item in (payload.get("data") or []) if isinstance(item, dict)]
-        return [work for work in output if _usable_image_url(work.image_url)][:limit]
+        return [work for work in output if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")][:limit]
 
     def _map(self, item: dict[str, Any]) -> Artwork:
         images = item.get("images") or {}
@@ -204,7 +204,7 @@ class RijksmuseumProvider:
                 *(self._resolve_work(client, uri) for uri in identifiers),
                 return_exceptions=True,
             )
-        return [work for work in works if isinstance(work, Artwork) and _usable_image_url(work.image_url)][:limit]
+        return [work for work in works if isinstance(work, Artwork) and (_usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or ""))][:limit]
 
     async def _get_linked_record(self, client: httpx.AsyncClient, uri: str) -> dict[str, Any]:
         parsed = urlparse(uri)
@@ -433,9 +433,10 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
                 id=f"artlogic:{row.get('id') or row.get('artwork_id')}",
                 title=row.get("title") or "Untitled",
                 artist=row.get("artist") or row.get("artist_name") or "Unknown artist",
-                # Artlogic requires feed images to be imported and served locally;
-                # do not hotlink the feed image URL. The source link remains available.
-                image_url=None,
+                # Prefer the feed's published thumbnail/image URL when present.
+                # The same-origin proxy is used only for explicitly allowlisted hosts;
+                # other HTTPS image URLs are loaded directly by the browser.
+                image_url=_extract_image_url(row),
                 detail_url=row.get("url") or row.get("permalink"),
                 source="Artlogic",
                 source_kind="commercial",
@@ -451,6 +452,64 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
             )
         )
     return output
+
+
+
+def _extract_image_url(item: Any) -> str | None:
+    """Extract a likely image URL from common gallery-feed field shapes."""
+    if not isinstance(item, dict):
+        return None
+
+    direct_keys = (
+        "image_url", "imageUrl", "thumbnail_url", "thumbnailUrl", "thumbnail",
+        "primary_image", "primaryImage", "cover_image", "coverImage", "image",
+        "image_uri", "imageUri", "preview_image", "previewImage",
+    )
+    nested_keys = ("url", "href", "src", "uri", "image_url", "thumbnail_url", "original_url", "large_url", "small_url")
+
+    def from_value(value: Any, depth: int = 0) -> str | None:
+        if depth > 3:
+            return None
+        if isinstance(value, str):
+            return _normalise_image_url(value)
+        if isinstance(value, dict):
+            for key in nested_keys:
+                candidate = value.get(key)
+                if candidate:
+                    result = from_value(candidate, depth + 1)
+                    if result:
+                        return result
+            for key in ("web", "primary", "thumbnail", "small", "preview", "cover", "original", "large", "image"):
+                candidate = value.get(key)
+                if candidate:
+                    result = from_value(candidate, depth + 1)
+                    if result:
+                        return result
+        if isinstance(value, list):
+            for candidate in value:
+                result = from_value(candidate, depth + 1)
+                if result:
+                    return result
+        return None
+
+    for key in direct_keys:
+        if item.get(key):
+            result = from_value(item[key])
+            if result:
+                return result
+
+    # Gallery feeds vary: images can be a keyed object, a list of image records,
+    # or a nested media object. Prioritise rendition names that usually work in cards.
+    images = item.get("images") or item.get("media") or item.get("artwork_images")
+    result = from_value(images)
+    if result:
+        return result
+
+    for key in ("assets", "files", "photos", "picture"):
+        result = from_value(item.get(key))
+        if result:
+            return result
+    return None
 
 
 

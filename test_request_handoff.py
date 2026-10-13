@@ -17,11 +17,14 @@ def test_results_page_has_required_root():
 
 def test_request_is_persisted_before_navigation():
     js = (ROOT / "static/js/app.js").read_text()
+    assert "localStorage" not in js
+    assert "putInspirationSetting('appState', appStateSnapshot())" in js
     start = js.index("function beginRequest(")
     end = js.index("async function runPendingRequest(", start)
     body = js[start:end]
     assert body.index("sessionStorage.setItem('artConciergePendingRequest'") < body.index("window.location.assign(")
-    assert "localStorage.setItem('artConciergePendingRequest'" in body
+    assert "localStorage.setItem('artConciergePendingRequest'" not in body
+    assert "sessionStorage.setItem('artConciergePendingRequest'" in body
 
 
 def test_pending_request_not_discarded_before_results_root_exists():

@@ -1,4 +1,4 @@
-from services.art_sources import ArtInstituteProvider, ClevelandProvider, MetProvider, _normalise_image_url, _usable_image_url
+from services.art_sources import ArtInstituteProvider, ArtlogicProvider, ClevelandProvider, MetProvider, _map_artlogic, _normalise_image_url, _usable_image_url
 
 
 def test_image_url_normalization():
@@ -89,8 +89,8 @@ def test_discover_returns_image_cards_and_separate_not_for_sale_works():
         agent.institutional_providers = lambda: providers
         try:
             result = await agent.run_concierge(ConciergeRequest(intent=Intent.discover, goal="Show me modern art", discovery_level=50))
-            assert len(result["results"]) == 6
-            assert len(result["not_for_sale"]) == 4
+            assert len(result["results"]) == 3
+            assert len(result["not_for_sale"]) == 3
             assert all(item["image_url"].startswith("https://") for item in result["results"] + result["not_for_sale"])
             assert all(item["availability"] == "not_for_sale" for item in result["not_for_sale"])
             assert all(len(provider.calls) == 1 for provider in providers), "each provider should receive only one query in the first pass"
@@ -99,3 +99,27 @@ def test_discover_returns_image_cards_and_separate_not_for_sale_works():
                 setattr(agent, name, value)
 
     asyncio.run(run_test())
+
+
+def test_artwork_with_approved_source_page_can_be_previewed_without_api_thumbnail():
+    from services.agent import _has_image_candidate
+    work = ArtInstituteProvider()._map(
+        {"id": 4321, "title": "Image metadata fallback", "artist_display": "Test Artist", "image_id": None},
+        "https://www.artic.edu/iiif/2",
+    )
+    assert work.image_url is None
+    assert work.detail_url == "https://www.artic.edu/artworks/4321"
+    assert _has_image_candidate(work)
+
+
+def test_artlogic_feed_maps_available_image_urls_from_common_fields():
+    works = _map_artlogic({"rows": [
+        {"id": 1, "title": "Direct thumb", "thumbnail_url": "https://cdn.gallery.example/work-1.jpg", "url": "https://gallery.example/work-1"},
+        {"id": 2, "title": "Nested image", "images": {"web": {"url": "https://cdn.gallery.example/work-2.jpg"}}, "url": "https://gallery.example/work-2"},
+        {"id": 3, "title": "Image list", "images": [{"src": "https://cdn.gallery.example/work-3.webp"}], "url": "https://gallery.example/work-3"},
+    ]})
+    assert [work.image_url for work in works] == [
+        "https://cdn.gallery.example/work-1.jpg",
+        "https://cdn.gallery.example/work-2.jpg",
+        "https://cdn.gallery.example/work-3.webp",
+    ]

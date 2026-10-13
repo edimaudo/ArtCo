@@ -35,17 +35,15 @@
               <h2 id="inspirationHeading">Use images for inspiration</h2>
               <p>Upload artwork, patterns, colours, or spaces that appeal to you.</p>
             </div>
-            <span class="inspiration-limit">Optional · Up to 5 per request</span>
           </div>
           <div class="inspiration-controls">
             <label class="inspiration-upload" for="inspirationFiles">
               <span class="inspiration-upload-icon" aria-hidden="true">＋</span>
-              <span class="inspiration-upload-copy"><strong>Add inspiration images</strong><span>JPEG, PNG or WebP · Saved on this device</span></span>
+              <span class="inspiration-upload-copy"><strong>Add inspiration images</strong><span>JPEG, PNG or WebP</span></span>
               <input id="inspirationFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple>
             </label>
             <button class="secondary-button" id="browseInspiration" type="button" aria-expanded="false" aria-controls="inspirationLibrary">Choose saved images</button>
           </div>
-          <p class="inspiration-privacy">Images are stored in this browser. Submitting sends selected images to ArtCo’s configured AI provider for visual analysis.</p>
           <p class="inspiration-message" id="inspirationMessage" role="status" aria-live="polite"></p>
           <div class="selected-inspiration-list" id="selectedInspirationList" aria-label="Images attached to this request"></div>
           <div class="inspiration-library" id="inspirationLibrary" hidden>
@@ -54,7 +52,6 @@
               <span id="inspirationLibraryCount"></span>
             </div>
             <div class="inspiration-image-grid" id="inspirationLibraryGrid"></div>
-            <p class="field-note">Select an image to include it in this request. Your collection stays in this browser.</p>
           </div>
         </section>
 

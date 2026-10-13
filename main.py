@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
+from html.parser import HTMLParser
 
 import httpx
 
@@ -16,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from models.schemas import ConciergeRequest
 from services.concierge import run
 from services.payments import PaymentUnavailable, PaymentConfigurationError, create_checkout_session, parse_webhook, verify_webhook_signature
-from services.image_proxy import is_allowed_image_url
+from services.image_proxy import is_allowed_detail_url, is_allowed_image_url
 from services.config import REQUEST_TIMEOUT
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -108,6 +109,146 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
 MAX_PROXY_IMAGE_BYTES = 8 * 1024 * 1024
 _PROXY_REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+
+
+class _ArtworkImageMetadataParser(HTMLParser):
+    """Extract likely artwork images from metadata and rendered HTML markup."""
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.candidates: list[str] = []
+        self.inline_candidates: list[tuple[int, str]] = []
+
+    @staticmethod
+    def _srcset_urls(value: str) -> list[str]:
+        urls: list[str] = []
+        for entry in value.split(","):
+            parts = entry.strip().split()
+            if parts:
+                urls.append(parts[0])
+        return urls
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key.lower(): value for key, value in attrs if key and value}
+        tag_name = tag.lower()
+        if tag_name == "meta":
+            key = (attributes.get("property") or attributes.get("name") or attributes.get("itemprop") or "").lower()
+            if key in {"og:image", "og:image:url", "twitter:image", "twitter:image:src", "image"}:
+                content = attributes.get("content")
+                if content:
+                    self.candidates.append(content.strip())
+        elif tag_name == "link":
+            rel = (attributes.get("rel") or "").lower().split()
+            if "image_src" in rel or ("image" in rel and attributes.get("itemprop") == "image"):
+                href = attributes.get("href")
+                if href:
+                    self.candidates.append(href.strip())
+        elif tag_name == "img":
+            image_values = []
+            for key in ("data-full-image", "data-zoom-image", "data-original", "data-lazy-src", "data-src", "src"):
+                value = attributes.get(key)
+                if value:
+                    image_values.append(value.strip())
+            image_values.extend(self._srcset_urls(attributes.get("srcset", "")))
+            context = " ".join(attributes.get(key, "") for key in ("alt", "title", "class", "id")).lower()
+            score = 20
+            if any(word in context for word in ("artwork", "object-image", "primary-image", "collection-image", "art-image", "painting", "sculpture")):
+                score += 40
+            if any(word in context for word in ("logo", "avatar", "icon", "profile", "social")):
+                score -= 80
+            width = attributes.get("width", "")
+            height = attributes.get("height", "")
+            try:
+                if width.isdigit() and height.isdigit():
+                    score += 20 if int(width) >= 250 and int(height) >= 250 else -20 if int(width) < 80 or int(height) < 80 else 0
+            except (TypeError, ValueError):
+                pass
+            for value in image_values:
+                self.inline_candidates.append((score, value))
+
+
+async def _get_allowed_redirected_url(
+    client: httpx.AsyncClient,
+    url: str,
+    allow_url: Any,
+    headers: dict[str, str],
+) -> httpx.Response:
+    current_url = url
+    for _ in range(4):
+        if not allow_url(current_url):
+            raise HTTPException(status_code=400, detail="This artwork source is not supported by ArtCo.")
+        response = await client.get(current_url, headers=headers, follow_redirects=False)
+        if response.status_code in _PROXY_REDIRECT_CODES:
+            location = response.headers.get("location")
+            if not location:
+                raise HTTPException(status_code=502, detail="The art source returned an invalid redirect.")
+            current_url = urljoin(current_url, location)
+            continue
+        return response
+    raise HTTPException(status_code=502, detail="The art source redirected too many times.")
+
+
+@app.get("/api/artwork-preview")
+async def artwork_preview_from_source(url: str) -> Response:
+    """Resolve an artwork page's primary image when its API thumbnail is missing/broken."""
+    if not is_allowed_detail_url(url):
+        raise HTTPException(status_code=400, detail="This artwork source page is not supported by ArtCo.")
+    headers = {
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
+        "User-Agent": "Mozilla/5.0 (compatible; ArtCoArtworkPreview/1.0)",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
+            page = await _get_allowed_redirected_url(client, url, is_allowed_detail_url, headers)
+            if page.status_code != 200:
+                raise HTTPException(status_code=502, detail="The artwork source page could not be read.")
+            page_type = page.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if page_type not in {"text/html", "application/xhtml+xml"}:
+                raise HTTPException(status_code=502, detail="The artwork source did not return a collection page.")
+            if len(page.content) > 2 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="The artwork source page is too large to inspect.")
+            parser = _ArtworkImageMetadataParser()
+            parser.feed(page.text)
+            page_base = str(page.url or url)
+            raw_candidates = list(parser.candidates) + [candidate for _, candidate in sorted(parser.inline_candidates, key=lambda item: item[0], reverse=True)]
+            image_url = None
+            for candidate in raw_candidates:
+                candidate_url = urljoin(page_base, candidate.strip())
+                # Many collection pages still publish http image metadata. Upgrade
+                # only when the exact same hostname is already in the HTTPS allowlist.
+                if candidate_url.lower().startswith("http://"):
+                    secure_candidate = "https://" + candidate_url[len("http://"):]
+                    if is_allowed_image_url(secure_candidate):
+                        candidate_url = secure_candidate
+                if is_allowed_image_url(candidate_url):
+                    image_url = candidate_url
+                    break
+            if not image_url:
+                raise HTTPException(status_code=404, detail="No supported artwork preview was found on the source page.")
+            image_response = await _get_allowed_redirected_url(
+                client,
+                image_url,
+                is_allowed_image_url,
+                {"Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "User-Agent": "ArtCoArtworkImageProxy/1.0"},
+            )
+            if image_response.status_code != 200:
+                raise HTTPException(status_code=502, detail="The artwork preview could not be loaded.")
+            content_type = image_response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if not content_type.startswith("image/"):
+                raise HTTPException(status_code=502, detail="The source preview was not an image.")
+            if len(image_response.content) > MAX_PROXY_IMAGE_BYTES:
+                raise HTTPException(status_code=413, detail="The artwork preview is too large to display.")
+            return Response(
+                content=image_response.content,
+                media_type=content_type,
+                headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"},
+            )
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, TimeoutError) as exc:
+        logger.info("Artwork preview fallback failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="The artwork preview is temporarily unavailable.") from exc
 
 
 @app.get("/api/artwork-image")

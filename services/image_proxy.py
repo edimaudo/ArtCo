@@ -20,20 +20,46 @@ ALLOWED_HOST_SUFFIXES = (
     ".rijksmuseum.nl",
 )
 
+ALLOWED_DETAIL_HOSTS = {
+    "artic.edu", "www.artic.edu",
+    "metmuseum.org", "www.metmuseum.org",
+    "clevelandart.org", "www.clevelandart.org",
+    "rijksmuseum.nl", "www.rijksmuseum.nl",
+    "artsy.net", "www.artsy.net",
+}
+ALLOWED_DETAIL_HOST_SUFFIXES = (".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net")
 
-def is_allowed_image_url(value: str) -> bool:
-    """Return True for HTTPS URLs on explicit public art-image hosts only."""
+
+def _safe_https_url(value: str) -> tuple[str, str] | None:
     try:
         parsed = urlparse(str(value or "").strip())
         host = (parsed.hostname or "").lower().rstrip(".")
         if parsed.scheme != "https" or not host or parsed.username or parsed.password:
-            return False
-        # No non-standard ports. Hosts above are public CDNs/APIs only.
+            return None
         if parsed.port not in (None, 443):
-            return False
-        return host in ALLOWED_EXACT_HOSTS or any(host.endswith(suffix) for suffix in ALLOWED_HOST_SUFFIXES)
+            return None
+        return host, parsed.netloc
     except (TypeError, ValueError):
+        return None
+
+
+def is_allowed_detail_url(value: str) -> bool:
+    """Restrict page-preview scraping to the official public collection sites."""
+    parsed = _safe_https_url(value)
+    if not parsed:
         return False
+    host, _ = parsed
+    return host in ALLOWED_DETAIL_HOSTS or any(host.endswith(suffix) for suffix in ALLOWED_DETAIL_HOST_SUFFIXES)
+
+
+def is_allowed_image_url(value: str) -> bool:
+    """Return True for HTTPS URLs on explicit public art-image hosts only."""
+    parsed = _safe_https_url(value)
+    if not parsed:
+        return False
+    host, _ = parsed
+    # No non-standard ports. Hosts above are public art collection image hosts only.
+    return host in ALLOWED_EXACT_HOSTS or any(host.endswith(suffix) for suffix in ALLOWED_HOST_SUFFIXES)
 
 
 def display_image_url(value: str | None) -> str | None:

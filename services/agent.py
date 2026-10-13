@@ -7,7 +7,7 @@ from typing import Any
 
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
-from .image_proxy import display_image_url
+from .image_proxy import display_image_url, is_allowed_detail_url
 from .llm import CandidateReview, analyze_inspiration_images, extract_request_signals, plan_art_searches, review_candidates
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
@@ -208,6 +208,11 @@ def _deterministic_score(
     return score
 
 
+def _has_image_candidate(work: Artwork) -> bool:
+    """True when a work has a direct thumbnail or an approved collection page for preview fallback."""
+    return _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")
+
+
 def _provider_configured(provider: Any) -> bool:
     if provider.name == "Artsy":
         return bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)
@@ -320,7 +325,7 @@ async def _research(
                     stat["errors"].append(error)
             else:
                 stat["results_found"] += len(batch)
-                stat["images_found"] += sum(1 for work in batch if _usable_image_url(work.image_url))
+                stat["images_found"] += sum(1 for work in batch if _has_image_candidate(work))
                 works.extend(batch)
 
     # Remove duplicates but retain image-less metadata long enough to diagnose
@@ -340,7 +345,7 @@ async def _research(
                 "state": "warning",
                 "detail": ", ".join(stat["errors"][:3]),
             })
-    if not any(_usable_image_url(work.image_url) for work in deduped.values()):
+    if not any(_has_image_candidate(work) for work in deduped.values()):
         logger.warning("No image-bearing artwork candidates found for queries %s; source diagnostics=%s", search_directions, source_stats)
     return list(deduped.values()), list(source_stats.values())
 
@@ -393,7 +398,7 @@ def _select(
     review_by_id = {item.artwork_id: item for item in (review.assessments if review else [])}
 
     ranked = sorted(
-        (work for work in works if _usable_image_url(work.image_url)),
+        (work for work in works if _has_image_candidate(work)),
         key=lambda work: (
             1 if _usable_image_url(work.image_url) else 0,
             review_by_id.get(work.id).score if work.id in review_by_id else _deterministic_score(work, request, qloo_artists, work.matched_direction or ""),
@@ -452,7 +457,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     directions = await _build_search_plan(request, signals, qloo_artists, status)
 
     works, source_diagnostics = await _research(directions, request, status)
-    image_count = len({work.id for work in works if _usable_image_url(work.image_url)})
+    image_count = len({work.id for work in works if _has_image_candidate(work)})
 
     # Only run one small fallback pass when the first pass cannot fill a useful
     # visual shortlist. It searches the extended source (Rijksmuseum) and extra
@@ -487,9 +492,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         source_diagnostics = list(stats_by_provider.values())
         status[-1]["state"] = "done"
 
-    # Only image-bearing works enter visible recommendations. An unusable image
-    # URL is not a recommendation-card substitute for actual artwork imagery.
-    works = [work for work in works if _usable_image_url(work.image_url) and _budget_ok(work, request)]
+    # Only works with a direct thumbnail or a verified public collection page
+    # enter visible recommendations. The page is a fallback for missing API thumbnails.
+    works = [work for work in works if _has_image_candidate(work) and _budget_ok(work, request)]
     status.append({"label": "Selecting the strongest matches", "state": "active"})
     review_context = request.goal or ""
     if visual_analysis:
@@ -522,15 +527,13 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     not_for_sale = [work for work in works if not (work.source_kind == "commercial" and work.availability == "available")]
 
     if request.purchase_required:
-        primary = [work for work in selected if work.source_kind == "commercial" and work.availability == "available"][: min(max(1, request.number_of_works), 8)]
+        primary = [work for work in selected if work.source_kind == "commercial" and work.availability == "available"][: min(max(1, request.number_of_works), 3)]
     elif request.intent.value == "curate":
-        primary = selected[: min(max(1, request.number_of_works), 8)]
+        primary = selected[: min(max(1, request.number_of_works), 3)]
     else:
-        # Six recommendations leave room for a separate set of additional
-        # not-for-sale works below, for a 5–10 item overall result experience.
-        primary = selected[:6]
+        primary = selected[:3]
     primary_ids = {work.id for work in primary}
-    secondary_limit = max(0, min(4, 10 - len(primary)))
+    secondary_limit = max(0, min(3, 6 - len(primary)))
     secondary = [work for work in not_for_sale if work.id not in primary_ids][:secondary_limit]
 
     intent_summary = {

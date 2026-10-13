@@ -1,65 +1,21 @@
 (() => {
-  const storage = {
-    profile: 'artCoProfile',
-    saved: 'artCoSaved',
-    recent: 'artCoRecent',
-    last: 'artCoLastResult',
-    stateVersion: 'artCoStateVersion',
-    selectedInspiration: 'artCoSelectedInspiration',
-  };
-  const STATE_VERSION = 4;
+  const STATE_VERSION = 6;
 
-  const readJson = (key, fallback) => {
-    try {
-      const value = JSON.parse(localStorage.getItem(key) || 'null');
-      return value ?? fallback;
-    } catch {
-      return fallback;
-    }
-  };
-
-  function migrateState() {
-    const version = Number(localStorage.getItem(storage.stateVersion) || 0);
-    if (version < 1) {
-      const legacyProfile = readJson('artConciergeProfile', null);
-      const legacySaved = readJson('artConciergeSaved', null);
-      const legacyRecent = readJson('artConciergeRecent', null);
-      const legacyLast = readJson('artConciergeLastResult', null);
-      if (legacyProfile && !localStorage.getItem(storage.profile)) localStorage.setItem(storage.profile, JSON.stringify(legacyProfile));
-      if (legacySaved && !localStorage.getItem(storage.saved)) localStorage.setItem(storage.saved, JSON.stringify(legacySaved));
-      if (legacyRecent && !localStorage.getItem(storage.recent)) localStorage.setItem(storage.recent, JSON.stringify(legacyRecent));
-      if (legacyLast && !localStorage.getItem(storage.last)) localStorage.setItem(storage.last, JSON.stringify(legacyLast));
-    }
-    localStorage.setItem(storage.stateVersion, String(STATE_VERSION));
-  }
-
-  migrateState();
-
-  const storedProfile = readJson(storage.profile, {});
   const state = {
-    profile: {
-      loves: Array.isArray(storedProfile.loves) ? storedProfile.loves.slice(0, 12) : [],
-      avoids: Array.isArray(storedProfile.avoids || storedProfile.avoid_references) ? (storedProfile.avoids || storedProfile.avoid_references).slice(0, 12) : [],
-      notes: String(storedProfile.notes || ''),
-      discoveryLevel: Number(storedProfile.discoveryLevel ?? 50),
-      updatedAt: storedProfile.updatedAt || null,
-    },
-    saved: Array.isArray(readJson(storage.saved, [])) ? readJson(storage.saved, []).slice(0, 40) : [],
-    recent: Array.isArray(readJson(storage.recent, [])) ? readJson(storage.recent, []).slice(0, 8) : [],
-    last: readJson(storage.last, null),
+    profile: { loves: [], avoids: [], notes: '', discoveryLevel: 50, updatedAt: null },
+    saved: [],
+    recent: [],
+    last: null,
+    preferences: { theme: 'light', fontScale: 'md' },
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
-    inspiration: {
-      selectedIds: Array.isArray(readJson(storage.selectedInspiration, []))
-        ? readJson(storage.selectedInspiration, []).filter((id) => typeof id === 'string').slice(0, 5)
-        : [],
-      libraryOpen: false,
-    },
+    inspiration: { selectedIds: [], libraryOpen: false },
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const INSPIRATION_DB_NAME = 'artCoInspirationDB';
   const INSPIRATION_STORE = 'images';
+  const INSPIRATION_SETTINGS_STORE = 'settings';
   const MAX_REQUEST_IMAGES = 5;
   const MAX_LIBRARY_IMAGES = 30;
   const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -71,12 +27,15 @@
     if (!('indexedDB' in window)) return Promise.reject(new Error('This browser does not support local image storage.'));
     if (inspirationDbPromise) return inspirationDbPromise;
     inspirationDbPromise = new Promise((resolve, reject) => {
-      const request = window.indexedDB.open(INSPIRATION_DB_NAME, 1);
+      const request = window.indexedDB.open(INSPIRATION_DB_NAME, 2);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(INSPIRATION_STORE)) {
           const store = db.createObjectStore(INSPIRATION_STORE, { keyPath: 'id' });
           store.createIndex('createdAt', 'createdAt', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(INSPIRATION_SETTINGS_STORE)) {
+          db.createObjectStore(INSPIRATION_SETTINGS_STORE, { keyPath: 'key' });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -84,6 +43,78 @@
       request.onblocked = () => { inspirationDbPromise = null; reject(new Error('Close another ArtCo tab to finish updating local image storage.')); };
     });
     return inspirationDbPromise;
+  }
+
+  async function getInspirationSetting(key, fallback = null) {
+    const db = await openInspirationDb();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(INSPIRATION_SETTINGS_STORE, 'readonly').objectStore(INSPIRATION_SETTINGS_STORE).get(key);
+      request.onsuccess = () => resolve(request.result ? request.result.value : fallback);
+      request.onerror = () => reject(new Error('Could not read the inspiration settings.'));
+    });
+  }
+
+  async function putInspirationSetting(key, value) {
+    const db = await openInspirationDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(INSPIRATION_SETTINGS_STORE, 'readwrite');
+      transaction.objectStore(INSPIRATION_SETTINGS_STORE).put({ key, value });
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(new Error('Could not save the inspiration settings.'));
+    });
+  }
+
+  function appStateSnapshot() {
+    return {
+      version: STATE_VERSION,
+      profile: state.profile,
+      saved: state.saved,
+      recent: state.recent,
+      last: state.last,
+      preferences: state.preferences,
+    };
+  }
+
+  function persistAppState() {
+    putInspirationSetting('appState', appStateSnapshot()).catch((error) => {
+      console.warn('ArtCo could not persist app state in IndexedDB.', error);
+    });
+  }
+
+  async function hydrateAppState() {
+    try {
+      const existing = await getInspirationSetting('appState', null);
+      if (existing && typeof existing === 'object') {
+        const profile = existing.profile || {};
+        state.profile = {
+          loves: Array.isArray(profile.loves) ? profile.loves.slice(0, 12) : [],
+          avoids: Array.isArray(profile.avoids || profile.avoid_references) ? (profile.avoids || profile.avoid_references).slice(0, 12) : [],
+          notes: String(profile.notes || ''),
+          discoveryLevel: Number(profile.discoveryLevel ?? 50),
+          updatedAt: profile.updatedAt || null,
+        };
+        state.saved = Array.isArray(existing.saved) ? existing.saved.slice(0, 40) : [];
+        state.recent = Array.isArray(existing.recent) ? existing.recent.slice(0, 8) : [];
+        state.last = existing.last || null;
+        state.preferences = {
+          theme: existing.preferences?.theme === 'dark' ? 'dark' : 'light',
+          fontScale: ['sm', 'md', 'lg'].includes(existing.preferences?.fontScale) ? existing.preferences.fontScale : 'md',
+        };
+      } else {
+        // IndexedDB is the sole persistent store for app data. Request navigation
+        // state is short-lived and uses sessionStorage separately.
+        await putInspirationSetting('appState', appStateSnapshot());
+        await putInspirationSetting('selectedIds', []);
+      }
+      const savedSelection = await getInspirationSetting('selectedIds', []);
+      state.inspiration.selectedIds = Array.isArray(savedSelection)
+        ? savedSelection.filter((id) => typeof id === 'string').slice(0, MAX_REQUEST_IMAGES)
+        : [];
+    } catch (error) {
+      // Continue with the in-memory defaults if browser storage is unavailable.
+      // No server account or cross-device sync is implied.
+      console.warn('ArtCo could not load its browser library.', error);
+    }
   }
 
   async function putInspirationImage(record) {
@@ -147,7 +178,11 @@
 
   function saveSelectedInspiration() {
     state.inspiration.selectedIds = [...new Set(state.inspiration.selectedIds)].slice(0, MAX_REQUEST_IMAGES);
-    localStorage.setItem(storage.selectedInspiration, JSON.stringify(state.inspiration.selectedIds));
+    // Selection metadata stays in IndexedDB alongside the inspiration library.
+    putInspirationSetting('selectedIds', state.inspiration.selectedIds).catch((error) => {
+      const status = $('#inspirationMessage');
+      if (status) status.textContent = error.message || 'Could not save the selected images.';
+    });
   }
 
   function clearInspirationObjectUrls() {
@@ -242,12 +277,12 @@
 
   function saveProfile() {
     state.profile.updatedAt = new Date().toISOString();
-    localStorage.setItem(storage.profile, JSON.stringify(state.profile));
+    persistAppState();
   }
 
   function saveLastResult(data) {
     state.last = data;
-    localStorage.setItem(storage.last, JSON.stringify(data));
+    persistAppState();
   }
 
   function saveRecent(request, result) {
@@ -260,7 +295,7 @@
       data: result,
     };
     state.recent = [item, ...state.recent.filter((entry) => entry.prompt !== item.prompt)].slice(0, 8);
-    localStorage.setItem(storage.recent, JSON.stringify(state.recent));
+    persistAppState();
   }
 
   function structuredCloneSafe(value) {
@@ -295,10 +330,10 @@
   }
 
   function applyThemeControls() {
-    const theme = localStorage.getItem('artConciergeTheme') || 'light';
+    const theme = state.preferences.theme || 'light';
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    const font = localStorage.getItem('artConciergeFontScale') || 'md';
+    const font = state.preferences.fontScale || 'md';
     document.documentElement.style.setProperty('--scale', ({ sm: .92, md: 1, lg: 1.12 }[font] || 1));
     const select = $('#fontScale');
     if (select) select.value = font;
@@ -309,12 +344,14 @@
   function setupGlobalControls() {
     $('#themeToggle')?.addEventListener('click', () => {
       const next = (document.documentElement.dataset.theme || 'light') === 'dark' ? 'light' : 'dark';
-      localStorage.setItem('artConciergeTheme', next);
+      state.preferences.theme = next;
+      persistAppState();
       applyThemeControls();
     });
     $('#fontScale')?.addEventListener('change', (event) => {
       const value = event.target.value;
-      localStorage.setItem('artConciergeFontScale', value);
+      state.preferences.fontScale = value;
+      persistAppState();
       document.documentElement.style.setProperty('--scale', ({ sm: .92, md: 1, lg: 1.12 }[value] || 1));
     });
   }
@@ -522,9 +559,10 @@
       const works = state.saved.slice(0, 3);
       saved.innerHTML = works.map((work) => {
         const id = escapeAttribute(work.id);
-        const image = work.image_url
-          ? `<img data-artwork-image src="${escapeAttribute(work.image_url)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
-          : '<div class="saved-thumb no-image">Image unavailable</div>';
+        const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url);
+        const image = savedImageUrl
+          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+          : '<div class="saved-thumb no-image">Preview unavailable</div>';
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
       bindArtworkImageFallbacks(saved);
@@ -674,13 +712,13 @@
     const inferred = params.has('intent') ? state.intent : inferIntent(clean);
     const request = buildRequest(clean, null, inferred);
     const serialized = JSON.stringify(request);
-    // Write before navigation. Session storage is preferred; local storage is
-    // a guarded fallback for browser contexts where sessionStorage is blocked.
+    // This is a one-tab handoff, not persistent user data. Keep it in sessionStorage.
     try {
       sessionStorage.setItem('artConciergePendingRequest', serialized);
-      localStorage.removeItem('artConciergePendingRequest');
     } catch (error) {
-      localStorage.setItem('artConciergePendingRequest', serialized);
+      const status = $('#inspirationMessage');
+      if (status) status.textContent = 'ArtCo could not prepare the request in this browser tab. Please allow session storage and try again.';
+      return;
     }
     state.inspiration.selectedIds = [];
     saveSelectedInspiration();
@@ -690,14 +728,13 @@
   async function runPendingRequest() {
     const resultsPage = $('#resultsPage');
     if (!resultsPage) return false;
-    const raw = sessionStorage.getItem('artConciergePendingRequest') || localStorage.getItem('artConciergePendingRequest');
+    const raw = sessionStorage.getItem('artConciergePendingRequest');
     if (!raw) return false;
     let payload;
     try { payload = JSON.parse(raw); } catch { return false; }
     // Consume only after the results page and request payload are valid. This avoids
     // losing a user's brief if navigation lands on a stale or incorrect template.
     sessionStorage.removeItem('artConciergePendingRequest');
-    localStorage.removeItem('artConciergePendingRequest');
 
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
@@ -781,32 +818,47 @@
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
       image.addEventListener('error', () => {
-        // Try the provider's direct URL once if the same-origin proxy failed.
-        // This retains support for providers outside the proxy allowlist.
+        // Try the direct image URL first when the same-origin proxy failed.
         const originalSrc = image.dataset.originalSrc;
         if (originalSrc) {
           delete image.dataset.originalSrc;
           image.src = originalSrc;
           return;
         }
+        // A collection page may have a working primary image even when its API
+        // omits the thumbnail URL or serves a stale thumbnail. Resolve og:image
+        // from the known collection page before giving up.
+        const detailUrl = image.dataset.detailUrl;
+        if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
+          image.dataset.triedDetailPreview = 'true';
+          image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
+          return;
+        }
         const placeholder = document.createElement('div');
         placeholder.className = 'art-placeholder';
-        placeholder.textContent = 'Image temporarily unavailable';
+        placeholder.textContent = 'Preview unavailable';
         placeholder.setAttribute('role', 'img');
-        placeholder.setAttribute('aria-label', 'Artwork image temporarily unavailable');
+        placeholder.setAttribute('aria-label', 'Artwork preview unavailable; open the source page to view the work');
         image.replaceWith(placeholder);
       });
     });
+  }
+
+  function artworkPreviewUrl(detailUrl) {
+    return detailUrl ? `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}` : '';
   }
 
   function renderCard(work) {
     const available = work.availability === 'available' && work.source_kind === 'commercial';
     const availability = available ? 'available' : 'not_for_sale';
     const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
-    const imageDisplayUrl = work.display_image_url || work.image_url;
+    const directImageUrl = work.image_url || '';
+    const pagePreviewUrl = artworkPreviewUrl(work.detail_url);
+    const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl;
+    const previewIsInitial = Boolean(pagePreviewUrl && imageDisplayUrl === pagePreviewUrl);
     const image = imageDisplayUrl
-      ? `<img data-artwork-image ${work.display_image_url && work.display_image_url !== work.image_url ? `data-original-src="${escapeAttribute(work.image_url || '')}"` : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async">`
-      : '<div class="art-placeholder">Image unavailable</div>';
+      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+      : '<div class="art-placeholder">Preview unavailable</div>';
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
     const externalLink = work.detail_url
@@ -853,7 +905,7 @@
     $('#resultsMeta').textContent = intent === 'buy'
       ? (available ? `${available} purchase option${available === 1 ? '' : 's'} found` : 'No purchase inventory found')
       : `${data.total_found || 0} works researched`;
-    const results = (data.results || []).slice(0, 8);
+    const results = (data.results || []).slice(0, 3);
     if (results.length) {
       $('#artGrid').innerHTML = results.map(renderCard).join('');
       bindArtworkImageFallbacks($('#artGrid'));
@@ -874,7 +926,7 @@
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
-    const notForSale = (data.not_for_sale || []).slice(0, 4);
+    const notForSale = (data.not_for_sale || []).slice(0, 3);
     $('#notForSaleSection').hidden = !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');
@@ -915,7 +967,7 @@
     if (index >= 0) state.saved.splice(index, 1);
     else state.saved.unshift(artwork);
     state.saved = state.saved.slice(0, 40);
-    localStorage.setItem(storage.saved, JSON.stringify(state.saved));
+    persistAppState();
     if (window.ART_CONCIERGE_PAGE === 'results' && state.last) renderResults(state.last);
     if (window.ART_CONCIERGE_PAGE === 'saved') renderSavedPage();
   }
@@ -1050,7 +1102,7 @@
       if (recent) {
         const item = state.recent.find((entry) => entry.id === recent.dataset.recentId);
         if (item?.request) {
-          localStorage.setItem('artCoResumeRequest', JSON.stringify(item.request));
+          sessionStorage.setItem('artCoResumeRequest', JSON.stringify(item.request));
           window.location.href = `/concierge?intent=${encodeURIComponent(item.intent)}&resume=1`;
         } else if (item?.data) {
           saveLastResult(item.data);
@@ -1100,7 +1152,7 @@
     renderInspirationGallery();
   }
 
-  function initConcierge() {
+  async function initConcierge() {
     const params = new URLSearchParams(window.location.search);
     const useImageId = params.get('useImage');
     if (useImageId) {
@@ -1119,7 +1171,7 @@
     const resume = params.get('resume');
     if (resume === '1') {
       try {
-        const request = readJson('artCoResumeRequest', null);
+        const request = JSON.parse(sessionStorage.getItem('artCoResumeRequest') || 'null');
         if (request?.goal) {
           const input = $('#requestInput');
           if (input) input.value = request.goal;
@@ -1135,7 +1187,7 @@
             history.innerHTML = `<div class="conversation-entry"><p class="label">Previous request</p><p>${escapeHtml(request.goal)}</p></div><div class="conversation-entry"><p class="label">Continue from here</p><p>Refine the request, add a preference, or ask me to take it in a new direction.</p></div>`;
           }
         }
-        localStorage.removeItem('artCoResumeRequest');
+        sessionStorage.removeItem('artCoResumeRequest');
       } catch {}
     }
 
@@ -1240,18 +1292,22 @@
   }
 
 
-  applyThemeControls();
-  setupGlobalControls();
-  setActiveNav();
-  handleGlobalClicks();
+  async function initializeArtCo() {
+    await hydrateAppState();
+    applyThemeControls();
+    setupGlobalControls();
+    setActiveNav();
+    handleGlobalClicks();
 
-  switch (window.ART_CONCIERGE_PAGE) {
-    case 'home': initHome(); break;
-    case 'dashboard': initDashboard(); break;
-    case 'concierge': initConcierge(); break;
-    case 'results': initResults(); break;
-    case 'saved': initSaved(); break;
-    case 'taste': initTaste(); break;
-    default: break;
+    switch (window.ART_CONCIERGE_PAGE) {
+      case 'home': initHome(); break;
+      case 'dashboard': initDashboard(); break;
+      case 'concierge': await initConcierge(); break;
+      case 'results': initResults(); break;
+      case 'saved': initSaved(); break;
+      case 'taste': initTaste(); break;
+      default: break;
+    }
   }
+  initializeArtCo();
 })();
