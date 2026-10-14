@@ -80,7 +80,7 @@ def test_concierge_ui_has_image_upload_and_no_redundant_composer_labels():
     assert "What would you like help with?" not in response.text
 
 
-def test_concierge_image_signals_are_added_to_art_search_plan(monkeypatch):
+def test_fast_vision_response_can_inform_initial_catalogue_search(monkeypatch):
     import asyncio
     from types import SimpleNamespace
 
@@ -88,7 +88,6 @@ def test_concierge_image_signals_are_added_to_art_search_plan(monkeypatch):
     from models.schemas import InspirationImage
     from services.llm import VisualAnalysis
 
-    observed = {}
     image = InspirationImage(
         image_id="image-vision",
         mime_type="image/jpeg",
@@ -128,8 +127,6 @@ def test_concierge_image_signals_are_added_to_art_search_plan(monkeypatch):
     monkeypatch.setattr(agent, "extract_request_signals", fake_extract)
     monkeypatch.setattr(agent, "search_entities", fake_search_entities)
     monkeypatch.setattr(agent, "get_artist_insights", fake_artist_insights)
-    monkeypatch.setattr(agent, "plan_art_searches", fake_plan)
-    monkeypatch.setattr(agent, "review_candidates", fake_review)
     monkeypatch.setattr(agent, "commercial_providers", lambda: [])
     monkeypatch.setattr(agent, "institutional_providers", lambda: [])
 
@@ -140,12 +137,10 @@ def test_concierge_image_signals_are_added_to_art_search_plan(monkeypatch):
         inspiration_images=[image],
     )))
 
-    assert "geometric abstract painting" in observed["art_interests"]
+    assert "geometric abstract painting" in result["search_directions"]
     assert result["visual_inspiration"]["analyzed"] is True
     assert result["visual_inspiration"]["image_count"] == 1
     assert "high contrast" in result["visual_inspiration"]["visual_attributes"]
-    assert "Visual inspiration summary: Angular forms with a vivid palette." in observed["review_context"]
-    assert "Colour palette: navy, gold" in observed["review_context"]
 
 
 def test_api_accepts_image_payload_without_persisting_it_to_response(monkeypatch):

@@ -22,6 +22,7 @@ from services.config import REQUEST_TIMEOUT
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
+CONCIERGE_RESPONSE_TIMEOUT_SECONDS = 4.6
 
 app = FastAPI(
     title="ArtCo | Your personal art concierge",
@@ -109,6 +110,24 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
 MAX_PROXY_IMAGE_BYTES = 8 * 1024 * 1024
 _PROXY_REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+def _sniff_image_media_type(declared_type: str, payload: bytes) -> str | None:
+    """Accept valid image bytes from providers that label them octet-stream."""
+    media_type = (declared_type or "").split(";", 1)[0].strip().lower()
+    if media_type.startswith("image/"):
+        return media_type
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if payload.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "image/webp"
+    if len(payload) >= 12 and payload[4:8] == b"ftyp" and payload[8:12] in {b"avif", b"avis"}:
+        return "image/avif"
+    return None
+
 
 
 
@@ -234,11 +253,13 @@ async def artwork_preview_from_source(url: str) -> Response:
             )
             if image_response.status_code != 200:
                 raise HTTPException(status_code=502, detail="The artwork preview could not be loaded.")
-            content_type = image_response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=502, detail="The source preview was not an image.")
             if len(image_response.content) > MAX_PROXY_IMAGE_BYTES:
                 raise HTTPException(status_code=413, detail="The artwork preview is too large to display.")
+            content_type = _sniff_image_media_type(
+                image_response.headers.get("content-type", ""), image_response.content
+            )
+            if not content_type:
+                raise HTTPException(status_code=502, detail="The source preview was not an image.")
             return Response(
                 content=image_response.content,
                 media_type=content_type,
@@ -281,9 +302,7 @@ async def proxy_artwork_image(url: str) -> Response:
                         continue
                     if upstream.status_code != 200:
                         raise HTTPException(status_code=502, detail="The image provider could not return this artwork image.")
-                    content_type = upstream.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                    if not content_type.startswith("image/"):
-                        raise HTTPException(status_code=502, detail="The image provider returned a non-image response.")
+                    declared_content_type = upstream.headers.get("content-type", "")
                     declared_size = upstream.headers.get("content-length")
                     if declared_size and declared_size.isdigit() and int(declared_size) > MAX_PROXY_IMAGE_BYTES:
                         raise HTTPException(status_code=413, detail="The artwork image is too large to display.")
@@ -294,8 +313,12 @@ async def proxy_artwork_image(url: str) -> Response:
                         if total_size > MAX_PROXY_IMAGE_BYTES:
                             raise HTTPException(status_code=413, detail="The artwork image is too large to display.")
                         chunks.append(chunk)
+                    image_payload = b"".join(chunks)
+                    content_type = _sniff_image_media_type(declared_content_type, image_payload)
+                    if not content_type:
+                        raise HTTPException(status_code=502, detail="The image provider returned a non-image response.")
                     return Response(
-                        content=b"".join(chunks),
+                        content=image_payload,
                         media_type=content_type,
                         headers={
                             "Cache-Control": "public, max-age=86400",
@@ -402,8 +425,29 @@ async def diagnostics_live() -> dict[str, Any]:
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
     try:
-        result: dict[str, Any] = await run(payload)
+        result: dict[str, Any] = await asyncio.wait_for(
+            run(payload), timeout=CONCIERGE_RESPONSE_TIMEOUT_SECONDS
+        )
+        # Enforce the visible-card limit at the API boundary as well as in the
+        # agent and UI. This prevents a stale/alternate agent response from
+        # rendering a second shortlist beneath the primary three cards.
+        primary = list(result.get("results") or [])[:3]
+        remaining = max(0, 3 - len(primary))
+        secondary = list(result.get("not_for_sale") or [])[:remaining] if payload.intent.value == "buy" else []
+        result["results"] = primary
+        result["not_for_sale"] = secondary
         return JSONResponse(result)
+    except asyncio.TimeoutError:
+        logger.warning("Concierge request exceeded the %.1f second API deadline", CONCIERGE_RESPONSE_TIMEOUT_SECONDS)
+        return JSONResponse(
+            {
+                "success": False,
+                "detail": "This search exceeded ArtCo’s response-time limit. Try a more focused request.",
+                "error_type": "ResponseDeadlineExceeded",
+                "diagnostics": {"response_target_ms": int(CONCIERGE_RESPONSE_TIMEOUT_SECONDS * 1000)},
+            },
+            status_code=504,
+        )
     except Exception as exc:
         logger.exception("Concierge request failed")
         # Preserve a useful, non-sensitive API response instead of returning an

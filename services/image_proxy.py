@@ -11,6 +11,9 @@ ALLOWED_EXACT_HOSTS = {
     "images.metmuseum.org",
     "iiif.micr.io",
     "d32dm0rphc51dk.cloudfront.net",  # Artsy public thumbnails
+    "d7hftxdivxxvm.cloudfront.net",  # Artlogic / hosted gallery thumbnails
+    "cdn.shopify.com",
+    "images.ctfassets.net",
 }
 ALLOWED_HOST_SUFFIXES = (
     ".artic.edu",
@@ -18,6 +21,12 @@ ALLOWED_HOST_SUFFIXES = (
     ".clevelandart.org",
     ".micr.io",
     ".rijksmuseum.nl",
+    ".cloudinary.com",
+    ".shopifycdn.com",
+    ".squarespace-cdn.com",
+    ".ctfassets.net",
+    ".imgix.net",
+    ".artlogic.net",
 )
 
 ALLOWED_DETAIL_HOSTS = {
@@ -27,7 +36,9 @@ ALLOWED_DETAIL_HOSTS = {
     "rijksmuseum.nl", "www.rijksmuseum.nl",
     "artsy.net", "www.artsy.net",
 }
-ALLOWED_DETAIL_HOST_SUFFIXES = (".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net")
+ALLOWED_DETAIL_HOST_SUFFIXES = (
+    ".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net", ".artlogic.net"
+)
 
 
 def _safe_https_url(value: str) -> tuple[str, str] | None:

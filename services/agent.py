@@ -8,7 +8,7 @@ from typing import Any
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .image_proxy import display_image_url, is_allowed_detail_url
-from .llm import CandidateReview, analyze_inspiration_images, extract_request_signals, plan_art_searches, review_candidates
+from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -236,7 +236,7 @@ def _safe_provider_error(exc: Exception) -> str:
 
 async def _search_provider(provider: Any, direction: str, limit: int) -> tuple[str, str, list[Artwork], str | None]:
     try:
-        works = await asyncio.wait_for(provider.search(direction, limit=limit), timeout=max(7.0, config.REQUEST_TIMEOUT * 2 + 1))
+        works = await asyncio.wait_for(provider.search(direction, limit=limit), timeout=min(3.25, max(2.5, config.REQUEST_TIMEOUT * 0.82)))
         normalized = [
             replace(work, matched_direction=direction, image_url=_normalise_image_url(work.image_url))
             for work in works
@@ -426,98 +426,181 @@ def _select(
 
 
 
+async def _qloo_context(
+    request: ConciergeRequest,
+    signals: RequestSignals,
+    status: list[dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve known references and expand them through Qloo as a best-effort task."""
+    resolved = await _resolve_entities(request, status, signals)
+    artists = await _qloo_taste(resolved, request, status) if resolved else []
+    return resolved, artists
+
+
+def _fast_search_directions(request: ConciergeRequest) -> list[str]:
+    """Build catalogue-friendly queries without making a model call on the critical path."""
+    fallback_by_intent = {
+        "buy": ["contemporary art for sale", "original contemporary painting"],
+        "curate": ["contemporary painting", "art photography"],
+        "taste": ["contemporary painting", "abstract art"],
+        "learn": ["modern art", "art history"],
+    }
+    fallback = fallback_by_intent.get(
+        request.intent.value,
+        ["contemporary art", "modern painting", "contemporary photography"],
+    )
+    explicit = [
+        (request.goal or "").strip()[:140],
+        *request.art_interests[:2],
+        *request.mediums[:1],
+        *request.additional_interests[:1],
+        *fallback,
+    ]
+    return list(dict.fromkeys(item for item in explicit if item))[:4]
+
+
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
-    """Run a bounded concierge search and return an image-ready shortlist."""
+    """Run a time-bounded concierge search and return an image-ready shortlist.
+
+    Catalogue search, request interpretation, optional image analysis, and Qloo
+    enrichment run concurrently. The response uses deterministic ranking rather
+    than waiting for a second model-review pass, keeping the response budget under
+    five seconds when at least one public catalogue responds promptly.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    response_budget_seconds = 4.25
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
-    visual_analysis = await analyze_inspiration_images(request.goal or "", request.inspiration_images)
-    if request.inspiration_images:
-        if visual_analysis:
-            status.append({"label": "Interpreting your inspiration images", "state": "done"})
-        else:
-            status.append({
-                "label": "Visual analysis unavailable",
-                "state": "warning",
-                "detail": "The images were received, but could not be interpreted. The search will use your written request and saved taste.",
-            })
+    fallback_signals = RequestSignals(
+        cultural_references=list(dict.fromkeys(
+            request.loves + request.additional_interests + request.art_interests
+        ))[:10],
+        art_interests=request.art_interests[:8],
+        mediums=request.mediums[:6],
+        room=request.room,
+        size_preference=request.size_preference,
+        market=request.preferred_market,
+        budget_min=request.budget_min,
+        budget_max=request.budget_max,
+    )
+    directions = _fast_search_directions(request)
 
-    signals = await extract_request_signals(
+    # Kick off independent enrichment immediately. A short, bounded opportunity
+    # lets very fast vision/model responses inform the first queries without ever
+    # putting a full model round-trip in front of catalogue search.
+    signals_task = asyncio.create_task(extract_request_signals(
         request.goal or "",
         request.loves,
         request.additional_interests + request.art_interests,
         request.avoid_references,
+    ))
+    visual_task = (
+        asyncio.create_task(analyze_inspiration_images(request.goal or "", request.inspiration_images))
+        if request.inspiration_images else None
     )
+    qloo_task = asyncio.create_task(_qloo_context(request, fallback_signals, status))
+    early_enrichment = [signals_task] + ([visual_task] if visual_task else [])
+    if early_enrichment:
+        await asyncio.wait(early_enrichment, timeout=0.35)
+    early_signals = signals_task.result() if signals_task.done() and not signals_task.cancelled() and signals_task.exception() is None else fallback_signals
+    if not isinstance(early_signals, RequestSignals):
+        try:
+            early_signals = RequestSignals.model_validate(early_signals.model_dump() if hasattr(early_signals, "model_dump") else early_signals)
+        except Exception:
+            early_signals = fallback_signals
+    if visual_task and visual_task.done() and not visual_task.cancelled() and visual_task.exception() is None:
+        early_visual = visual_task.result()
+    else:
+        early_visual = None
+    fallback_directions = _fast_search_directions(request)
+    directions = list(dict.fromkeys([
+        (request.goal or "").strip()[:140],
+        *((early_visual.search_terms[:2] if early_visual else [])),
+        *early_signals.art_interests[:1],
+        *request.art_interests[:1],
+        *request.mediums[:1],
+        *early_signals.cultural_references[:1],
+        *[item for item in fallback_directions if item != (request.goal or "").strip()[:140]],
+    ]))[:4]
+    directions = [direction for direction in directions if direction]
+    research_task = asyncio.create_task(_research(directions, request, status))
+    tasks = [research_task, signals_task, qloo_task] + ([visual_task] if visual_task else [])
+
+    # Only the catalogue search is on the critical path. Enrichment shares its
+    # runtime, but never delays the response after the art sources have answered.
+    wait_budget = min(3.45, max(0.05, response_budget_seconds - (loop.time() - started) - 0.45))
+    try:
+        await asyncio.wait_for(asyncio.shield(research_task), timeout=wait_budget)
+    except Exception as exc:
+        logger.warning("Primary artwork search did not finish within the response budget (%s)", type(exc).__name__)
+        if not research_task.done():
+            research_task.cancel()
+
+    # Give concurrent enrichment a small grace period after the catalogue result
+    # is ready, but preserve the overall response deadline.
+    optional_pending = [task for task in tasks if task is not research_task and not task.done()]
+    grace = min(0.35, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
+    if optional_pending and grace > 0:
+        await asyncio.wait(optional_pending, timeout=grace)
+    pending = [task for task in tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    def completed_result(task: asyncio.Task, default: Any) -> Any:
+        if not task.done() or task.cancelled():
+            return default
+        try:
+            return task.result()
+        except Exception as exc:
+            logger.warning("Optional concierge task failed (%s)", type(exc).__name__)
+            return default
+
+    research_result = completed_result(research_task, ([], []))
+    works, source_diagnostics = research_result
+    signals = completed_result(signals_task, fallback_signals)
+    if not isinstance(signals, RequestSignals):
+        try:
+            signals = RequestSignals.model_validate(signals.model_dump() if hasattr(signals, "model_dump") else signals)
+        except Exception:
+            signals = fallback_signals
+    if visual_task:
+        visual_analysis = completed_result(visual_task, None) or early_visual
+    else:
+        visual_analysis = None
+
+    qloo_result = completed_result(qloo_task, ([], []))
+    resolved, qloo_artists = qloo_result if isinstance(qloo_result, tuple) and len(qloo_result) == 2 else ([], [])
+
     if visual_analysis:
         visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes]
         signals.art_interests = list(dict.fromkeys([*visual_terms, *signals.art_interests]))[:8]
+        status.append({"label": "Interpreting your inspiration images", "state": "done"})
+    elif request.inspiration_images:
+        status.append({
+            "label": "Visual analysis unavailable", "state": "warning",
+            "detail": "Images were received, but the visual analysis did not finish within the response time budget. The search used the written brief and saved taste.",
+        })
+
     request = _apply_signal_overrides(request, signals)
-
-    resolved = await _resolve_entities(request, status, signals)
-    qloo_artists = await _qloo_taste(resolved, request, status)
-    directions = await _build_search_plan(request, signals, qloo_artists, status)
-
-    works, source_diagnostics = await _research(directions, request, status)
-    image_count = len({work.id for work in works if _has_image_candidate(work)})
-
-    # Only run one small fallback pass when the first pass cannot fill a useful
-    # visual shortlist. It searches the extended source (Rijksmuseum) and extra
-    # directions, instead of repeating every query across every source.
-    if image_count < 5:
-        fallback_directions = list(dict.fromkeys([
-            *[item for item in directions[1:3] if item],
-            "contemporary painting with image",
-            "modern art collection",
-        ]))[:2]
-        status.append({"label": "Broadening the visual search", "state": "active"})
-        second_pass, second_diagnostics = await _research(
-            fallback_directions,
-            request,
-            status,
-            include_extended_sources=True,
-        )
-        works.extend(second_pass)
-        by_id: dict[str, Artwork] = {work.id: work for work in works}
-        works = list(by_id.values())
-        stats_by_provider = {item["provider"]: item for item in source_diagnostics}
-        for new_stat in second_diagnostics:
-            current = stats_by_provider.get(new_stat["provider"])
-            if current is None:
-                stats_by_provider[new_stat["provider"]] = new_stat
-                continue
-            current["configured"] = current["configured"] or new_stat["configured"]
-            current["queries_attempted"] += new_stat["queries_attempted"]
-            current["results_found"] += new_stat["results_found"]
-            current["images_found"] = current.get("images_found", 0) + new_stat.get("images_found", 0)
-            current["errors"] = list(dict.fromkeys(current["errors"] + new_stat["errors"]))
-        source_diagnostics = list(stats_by_provider.values())
-        status[-1]["state"] = "done"
+    for entry in status:
+        if entry.get("state") == "active":
+            entry["state"] = "skipped"
+            entry.setdefault("detail", "Skipped to preserve the response time budget.")
+    if not source_diagnostics:
+        status.append({"label": "Artwork sources did not respond in time", "state": "warning"})
+    if not directions:
+        directions = ["contemporary art"]
 
     # Only works with a direct thumbnail or a verified public collection page
     # enter visible recommendations. The page is a fallback for missing API thumbnails.
     works = [work for work in works if _has_image_candidate(work) and _budget_ok(work, request)]
-    status.append({"label": "Selecting the strongest matches", "state": "active"})
-    review_context = request.goal or ""
-    if visual_analysis:
-        visual_context = (
-            f"\nVisual inspiration summary: {visual_analysis.summary}"
-            f"\nVisible attributes: {', '.join(visual_analysis.visual_attributes)}"
-            f"\nColour palette: {', '.join(visual_analysis.colour_palette)}"
-            f"\nImage-derived search terms: {', '.join(visual_analysis.search_terms)}"
-            "\nWhen assessing fit, explain a concrete visual connection to these cues where supported by the candidate's metadata. "
-            "Do not claim to have inspected candidate images unless their metadata supports the claim."
-        )
-        review_context = f"{review_context}{visual_context}".strip()
-
-    review = await review_candidates(
-        request.intent.value,
-        review_context,
-        [_candidate_payload(work) for work in works[:30]],
-        request.discovery_level,
-        request.purchase_required,
-        min(max(1, request.number_of_works), 8),
-    )
-    status[-1]["state"] = "done"
-
+    status.append({"label": "Selecting the strongest matches", "state": "done"})
+    # Deterministic fit scoring is immediate; model-based candidate review was
+    # removed from the blocking path because it added a second serial LLM round.
+    review = None
     selected = _select(works, request, qloo_artists, review)
     review_data = _review_map(review)
     purchasable = [
@@ -533,7 +616,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     else:
         primary = selected[:3]
     primary_ids = {work.id for work in primary}
-    secondary_limit = max(0, min(3, 6 - len(primary)))
+    # Three is the total visible shortlist across both sections. Only Buy uses
+    # the secondary section to fill gaps when fewer than three works can be bought.
+    secondary_limit = max(0, 3 - len(primary)) if request.intent.value == "buy" else 0
     secondary = [work for work in not_for_sale if work.id not in primary_ids][:secondary_limit]
 
     intent_summary = {
@@ -549,6 +634,8 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "success": True,
         "intent": request.intent.value,
         "diagnostics": {
+            "duration_ms": round((loop.time() - started) * 1000),
+            "response_target_ms": 4500,
             "qloo_configured": bool(config.QLOO_API_KEY),
             "qloo_base_url": config.QLOO_BASE_URL,
             "gemini_configured": bool(config.GEMINI_API_KEY),

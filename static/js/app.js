@@ -561,7 +561,7 @@
         const id = escapeAttribute(work.id);
         const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url);
         const image = savedImageUrl
-          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin">`
+          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`
           : '<div class="saved-thumb no-image">Preview unavailable</div>';
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
@@ -817,21 +817,19 @@
   function bindArtworkImageFallbacks(root) {
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
-      image.addEventListener('error', () => {
-        // The public collection page often has a working image even when the
-        // API thumbnail is stale or the image CDN blocks hotlinking. Ask the
-        // same-origin preview endpoint first, then try the direct URL as a last
-        // fallback. This avoids immediately repeating a blocked CDN request.
-        const detailUrl = image.dataset.detailUrl;
-        if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
-          image.dataset.triedDetailPreview = 'true';
-          image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
-          return;
-        }
+      const advanceFallback = () => {
+        // Try the original museum/gallery URL first if ArtCo's proxy failed;
+        // then parse the official artwork page for its primary image.
         const originalSrc = image.dataset.originalSrc;
         if (originalSrc && image.dataset.triedOriginalSrc !== 'true') {
           image.dataset.triedOriginalSrc = 'true';
           image.src = originalSrc;
+          return;
+        }
+        const detailUrl = image.dataset.detailUrl;
+        if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
+          image.dataset.triedDetailPreview = 'true';
+          image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
           return;
         }
         const placeholder = document.createElement('div');
@@ -840,7 +838,11 @@
         placeholder.setAttribute('role', 'img');
         placeholder.setAttribute('aria-label', 'Artwork preview unavailable; open the source page to view the work');
         image.replaceWith(placeholder);
-      });
+      };
+      image.addEventListener('error', advanceFallback);
+      // A cached request can fail before handlers are attached after the card
+      // markup is inserted. Check that case as well, not only future error events.
+      if (image.complete && image.naturalWidth === 0) advanceFallback();
     });
   }
 
@@ -857,7 +859,7 @@
     const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl;
     const previewIsInitial = Boolean(pagePreviewUrl && imageDisplayUrl === pagePreviewUrl);
     const image = imageDisplayUrl
-      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin">`
+      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`
       : '<div class="art-placeholder">Preview unavailable</div>';
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
@@ -902,10 +904,15 @@
     $('#resultsHeading').textContent = labels[intent] || labels.discover;
     $('#resultsSummary').textContent = data.summary || '';
     const available = data.purchase_available || 0;
-    $('#resultsMeta').textContent = intent === 'buy'
-      ? (available ? `${available} purchase option${available === 1 ? '' : 's'} found` : 'No purchase inventory found')
-      : `${data.total_found || 0} works researched`;
     const results = (data.results || []).slice(0, 3);
+    const notForSale = intent === 'buy'
+      ? (data.not_for_sale || []).slice(0, Math.max(0, 3 - results.length))
+      : [];
+    const visibleCount = results.length + notForSale.length;
+    const visiblePurchasable = results.filter((work) => work.availability === 'available' && work.source_kind === 'commercial').length;
+    $('#resultsMeta').textContent = intent === 'buy'
+      ? `${visibleCount} work${visibleCount === 1 ? '' : 's'} shown · ${visiblePurchasable} available to acquire`
+      : `${visibleCount} recommendation${visibleCount === 1 ? '' : 's'} shown`;
     if (results.length) {
       $('#artGrid').innerHTML = results.map(renderCard).join('');
       bindArtworkImageFallbacks($('#artGrid'));
@@ -926,7 +933,6 @@
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
-    const notForSale = (data.not_for_sale || []).slice(0, 3);
     $('#notForSaleSection').hidden = !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');

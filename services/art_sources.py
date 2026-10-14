@@ -7,6 +7,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
+from .image_proxy import is_allowed_detail_url, is_allowed_image_url
 from .config import (
     ARTSY_PARTNER_ID,
     ARTSY_XAPP_TOKEN,
@@ -528,6 +529,11 @@ def _normalise_image_url(value: Any) -> str | None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    # HTTPS pages cannot reliably show HTTP thumbnails (browsers block mixed
+    # content). Prefer the HTTPS form for every public catalogue image URL; the
+    # browser or same-origin proxy will fail cleanly if that host has no TLS.
+    if parsed.scheme == "http":
+        return parsed._replace(scheme="https").geturl()
     return url
 
 

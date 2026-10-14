@@ -103,9 +103,10 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     agent = (root / "services/agent.py").read_text()
     concierge = (root / "templates/concierge.html").read_text()
     assert "(data.results || []).slice(0, 3)" in js
-    assert "(data.not_for_sale || []).slice(0, 3)" in js
+    assert "Math.max(0, 3 - results.length)" in js
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css
     assert "primary = selected[:3]" in agent
+    assert 'secondary_limit = max(0, 3 - len(primary)) if request.intent.value == "buy" else 0' in agent
     assert "width: min(100%, 185px)" in css
     assert "Images are stored in this browser" not in concierge
     assert "Optional · Up to 5 per request" not in concierge
@@ -161,3 +162,85 @@ def test_artsy_collection_pages_are_eligible_for_safe_image_fallback():
     from services.image_proxy import is_allowed_detail_url
     assert is_allowed_detail_url("https://www.artsy.net/artwork/example")
     assert not is_allowed_detail_url("https://artsy.net.evil.example/artwork/example")
+
+
+def test_proxy_recognizes_valid_jpeg_bytes_with_generic_content_type():
+    from main import _sniff_image_media_type
+    assert _sniff_image_media_type("application/octet-stream", b"\xff\xd8\xff\xe0jpeg") == "image/jpeg"
+    assert _sniff_image_media_type("application/octet-stream", b"<html>not an image</html>") is None
+
+
+def test_art_source_http_image_url_is_upgraded_to_avoid_mixed_content():
+    from services.art_sources import _normalise_image_url
+    assert _normalise_image_url("http://images.metmuseum.org/object.jpg") == "https://images.metmuseum.org/object.jpg"
+    assert _normalise_image_url("http://untrusted.example/object.jpg") == "https://untrusted.example/object.jpg"
+
+
+def test_proxy_accepts_common_gallery_cdn_hosts():
+    assert is_allowed_image_url("https://res.cloudinary.com/gallery/image/upload/work.jpg")
+    assert is_allowed_image_url("https://images.squarespace-cdn.com/content/v1/work.jpg")
+    assert is_allowed_image_url("https://cdn.shopify.com/s/files/1/work.jpg")
+    assert is_allowed_image_url("https://images.ctfassets.net/site/work.jpg")
+
+
+def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
+    import main as app_main
+    from models.schemas import ConciergeRequest, Intent
+
+    async def fake_run(payload):
+        return {
+            "success": True,
+            "intent": payload.intent.value,
+            "results": [{"id": f"primary-{i}"} for i in range(5)],
+            "not_for_sale": [{"id": f"secondary-{i}"} for i in range(5)],
+        }
+
+    monkeypatch.setattr(app_main, "run", fake_run)
+    client = TestClient(app_main.app)
+    response = client.post("/api/concierge", json={"intent": "discover", "goal": "show me art"})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 3
+    assert data["not_for_sale"] == []
+
+    response = client.post("/api/concierge", json={"intent": "buy", "goal": "show me art"})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 3
+    assert data["not_for_sale"] == []
+
+
+def test_static_assets_are_versioned_to_avoid_stale_result_caps():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
+    assert "/static/js/app.js?v=20261013-2" in html
+    assert "/static/css/style.css?v=20261013-2" in html
+
+
+def test_artlogic_cloudfront_cdn_is_proxyable():
+    assert is_allowed_image_url("https://d7hftxdivxxvm.cloudfront.net/?resize_to=fit&width=900")
+
+
+def test_concierge_route_enforces_a_hard_response_deadline(monkeypatch):
+    import asyncio
+    import main as app_main
+    from fastapi.testclient import TestClient
+
+    async def slow_run(payload):
+        await asyncio.sleep(0.25)
+        return {"success": True, "intent": payload.intent.value, "results": []}
+
+    monkeypatch.setattr(app_main, "run", slow_run)
+    monkeypatch.setattr(app_main, "CONCIERGE_RESPONSE_TIMEOUT_SECONDS", 0.05)
+    response = TestClient(app_main.app).post(
+        "/api/concierge", json={"intent": "discover", "goal": "modern painting"}
+    )
+    assert response.status_code == 504
+    assert response.json()["error_type"] == "ResponseDeadlineExceeded"
+
+
+def test_result_count_copy_reports_visible_recommendations_not_research_pool_size():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    assert "`${visibleCount} recommendation${visibleCount === 1 ? '' : 's'} shown`" in js
+    assert "${data.total_found || 0} works researched" not in js

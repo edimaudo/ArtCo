@@ -48,15 +48,13 @@ class FakeProvider:
         ]
 
 
-def test_discover_returns_image_cards_and_separate_not_for_sale_works():
+def test_discover_returns_three_total_image_cards_not_a_second_shortlist():
     async def run_test():
         providers = [FakeProvider("Collection A"), FakeProvider("Collection B"), FakeProvider("Collection C")]
         original = {
             "extract_request_signals": agent.extract_request_signals,
             "search_entities": agent.search_entities,
             "get_artist_insights": agent.get_artist_insights,
-            "plan_art_searches": agent.plan_art_searches,
-            "review_candidates": agent.review_candidates,
             "commercial_providers": agent.commercial_providers,
             "institutional_providers": agent.institutional_providers,
         }
@@ -73,26 +71,18 @@ def test_discover_returns_image_cards_and_separate_not_for_sale_works():
         async def fake_qloo(*args, **kwargs):
             return []
 
-        async def fake_plan(*args, **kwargs):
-            return SimpleNamespace(queries=["modern abstract painting", "contemporary artwork", "figurative painting", "mixed media art"])
-
-        async def fake_review(*args, **kwargs):
-            candidates = args[2]
-            return SimpleNamespace(assessments=[], follow_up_queries=[], critique="Reviewed image-bearing works.", coverage="Good.")
-
         agent.extract_request_signals = fake_extract
         agent.search_entities = fake_search
         agent.get_artist_insights = fake_qloo
-        agent.plan_art_searches = fake_plan
-        agent.review_candidates = fake_review
         agent.commercial_providers = lambda: []
         agent.institutional_providers = lambda: providers
         try:
             result = await agent.run_concierge(ConciergeRequest(intent=Intent.discover, goal="Show me modern art", discovery_level=50))
             assert len(result["results"]) == 3
-            assert len(result["not_for_sale"]) == 3
-            assert all(item["image_url"].startswith("https://") for item in result["results"] + result["not_for_sale"])
-            assert all(item["availability"] == "not_for_sale" for item in result["not_for_sale"])
+            assert result["not_for_sale"] == []
+            visible = result["results"] + result["not_for_sale"]
+            assert len(visible) == 3
+            assert all(item["image_url"].startswith("https://") for item in visible)
             assert all(len(provider.calls) == 1 for provider in providers), "each provider should receive only one query in the first pass"
         finally:
             for name, value in original.items():
@@ -123,3 +113,73 @@ def test_artlogic_feed_maps_available_image_urls_from_common_fields():
         "https://cdn.gallery.example/work-2.jpg",
         "https://cdn.gallery.example/work-3.webp",
     ]
+
+
+def test_concierge_does_not_wait_for_slow_optional_enrichment(monkeypatch):
+    import time
+    from services.llm import RequestSignals
+
+    provider = FakeProvider("Fast collection")
+
+    async def slow_extract(*_args, **_kwargs):
+        await asyncio.sleep(4)
+        return RequestSignals()
+
+    async def slow_qloo_search(_query):
+        await asyncio.sleep(4)
+        return []
+
+    async def slow_insights(*_args, **_kwargs):
+        await asyncio.sleep(4)
+        return []
+
+    monkeypatch.setattr(agent, "extract_request_signals", slow_extract)
+    monkeypatch.setattr(agent, "search_entities", slow_qloo_search)
+    monkeypatch.setattr(agent, "get_artist_insights", slow_insights)
+    monkeypatch.setattr(agent, "commercial_providers", lambda: [])
+    monkeypatch.setattr(agent, "institutional_providers", lambda: [provider])
+
+    async def run_test():
+        start = time.perf_counter()
+        result = await agent.run_concierge(ConciergeRequest(intent=Intent.discover, goal="Find calm abstract art"))
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.2, f"fast catalogue results were blocked by enrichment ({elapsed:.2f}s)"
+        assert len(result["results"]) <= 3
+        assert result["diagnostics"]["duration_ms"] < 1200
+
+    asyncio.run(run_test())
+
+
+def test_concierge_caps_slow_catalogue_requests_under_five_seconds(monkeypatch):
+    import time
+    from services.llm import RequestSignals
+
+    class SlowProvider:
+        name = "Slow collection"
+        async def search(self, query: str, limit: int = 8):
+            await asyncio.sleep(8)
+            return []
+
+    async def fast_extract(*_args, **_kwargs):
+        return RequestSignals()
+
+    async def empty_search(_query):
+        return []
+
+    async def empty_insights(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(agent, "extract_request_signals", fast_extract)
+    monkeypatch.setattr(agent, "search_entities", empty_search)
+    monkeypatch.setattr(agent, "get_artist_insights", empty_insights)
+    monkeypatch.setattr(agent, "commercial_providers", lambda: [])
+    monkeypatch.setattr(agent, "institutional_providers", lambda: [SlowProvider()])
+
+    async def run_test():
+        start = time.perf_counter()
+        result = await agent.run_concierge(ConciergeRequest(intent=Intent.discover, goal="Slow provider test"))
+        elapsed = time.perf_counter() - start
+        assert elapsed < 4.5, f"catalogue timeout exceeded the five-second service target ({elapsed:.2f}s)"
+        assert result["diagnostics"]["duration_ms"] < 4500
+
+    asyncio.run(run_test())

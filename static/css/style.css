@@ -1123,3 +1123,116 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   color: var(--muted);
   font-size: .68rem;
 }
+
+/* Consistent workspace hierarchy and spacing across internal pages. */
+.shell,
+.topbar {
+  width: min(1180px, calc(100% - 48px));
+}
+.workspace-page {
+  padding-top: 48px;
+  padding-bottom: 76px;
+}
+.workspace-page h1,
+.checkout-status h1 {
+  max-width: 790px;
+  font-size: clamp(2.35rem, 4.1vw, 3.85rem);
+  line-height: 1.04;
+  letter-spacing: -.04em;
+}
+.workspace-page .lede,
+.checkout-status .lede {
+  max-width: 650px;
+  margin-top: 16px;
+  font-size: .98rem;
+  line-height: 1.58;
+}
+.workspace-header {
+  gap: 32px;
+  align-items: center;
+}
+.workspace-header > div:first-child { min-width: 0; }
+.workspace-header .primary-button,
+.workspace-header .secondary-button { white-space: nowrap; }
+.dashboard-page .dashboard-header h1 {
+  font-size: clamp(2.35rem, 4.1vw, 3.85rem);
+  line-height: 1.04;
+}
+.results-heading {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 30px;
+}
+.results-heading .header-actions-group {
+  padding-top: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.result-section { margin-top: 42px; }
+.taste-summary { margin-top: 36px; }
+.not-for-sale { margin-top: 42px; }
+.art-grid { gap: 20px; }
+.art-image-wrap img { object-fit: contain; background: var(--surface-2); }
+.saved-thumb img { object-fit: contain; background: var(--surface-2); }
+.art-body { padding: 16px; gap: 8px; }
+.card-action { font-size: .76rem; padding-inline: 11px; }
+.art-source { font-size: .68rem; }
+.dashboard-tabs { margin-top: 38px; }
+.dashboard-tab-panel { padding-top: 36px; }
+.dashboard-overview-grid,
+.taste-editor-grid { gap: 48px; }
+.taste-editor-lower { gap: 44px; }
+.concierge-shell { max-width: 880px; }
+.concierge-header h1 { max-width: 760px; }
+.concierge-header .lede { max-width: 600px; }
+
+@media (max-width: 860px) {
+  .workspace-page { padding-top: 36px; }
+  .workspace-header,
+  .results-heading { grid-template-columns: 1fr; }
+  .workspace-header .primary-button,
+  .workspace-header .secondary-button { justify-self: start; }
+  .results-heading .header-actions-group { justify-content: flex-start; padding-top: 0; }
+  .dashboard-overview-grid,
+  .taste-editor-grid,
+  .taste-editor-lower,
+  .taste-panel-header { gap: 34px; }
+}
+@media (max-width: 600px) {
+  .shell,
+  .topbar { width: calc(100% - 32px); }
+  .workspace-page { padding-top: 28px; padding-bottom: 56px; }
+  .workspace-page h1,
+  .checkout-status h1,
+  .dashboard-page .dashboard-header h1 { font-size: clamp(2rem, 8.5vw, 2.7rem); }
+  .workspace-page .lede { font-size: .94rem; }
+  .result-section { margin-top: 32px; }
+  .art-grid { gap: 14px; }
+}
+
+/* Final alignment pass: keep page headers, content columns, and actions on a shared rhythm. */
+.dashboard-header {
+  gap: clamp(24px, 3.2vw, 40px);
+  align-items: center;
+}
+.dashboard-overview-grid {
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, .92fr);
+  gap: clamp(28px, 3.8vw, 46px);
+}
+.dashboard-heading { align-items: start; gap: 18px; }
+.saved-page .saved-library { margin-top: 42px; }
+.checkout-page .checkout-status {
+  max-width: 760px;
+  margin: 26px auto 0;
+}
+.checkout-status .lede { max-width: 620px; }
+.checkout-actions { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 12px; }
+@media (max-width: 860px) {
+  .dashboard-header { grid-template-columns: 1fr; gap: 24px; align-items: start; }
+  .dashboard-overview-grid { grid-template-columns: 1fr; gap: 34px; }
+}
+@media (max-width: 600px) {
+  .dashboard-header .primary-button { width: 100%; }
+  .checkout-page .checkout-status { margin-top: 8px; }
+  .checkout-actions { flex-direction: column; align-items: stretch; }
+}
