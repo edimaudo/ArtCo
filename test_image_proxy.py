@@ -213,8 +213,8 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
 def test_static_assets_are_versioned_to_avoid_stale_result_caps():
     from pathlib import Path
     html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
-    assert "/static/js/app.js?v=20261013-2" in html
-    assert "/static/css/style.css?v=20261013-2" in html
+    assert "/static/js/app.js?v=20261014-1" in html
+    assert "/static/css/style.css?v=20261014-1" in html
 
 
 def test_artlogic_cloudfront_cdn_is_proxyable():
@@ -244,3 +244,74 @@ def test_result_count_copy_reports_visible_recommendations_not_research_pool_siz
     js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
     assert "`${visibleCount} recommendation${visibleCount === 1 ? '' : 's'} shown`" in js
     assert "${data.total_found || 0} works researched" not in js
+
+
+def test_collect24_gallery_pages_and_images_are_eligible_for_safe_preview():
+    assert is_allowed_image_url("https://cdn.collect24.art/artwork/example.jpg")
+    assert is_allowed_image_url("https://images.collect24.art/artwork/example.jpg")
+    assert is_allowed_detail_url("https://www.collect24.art/artwork/example")
+
+
+def test_saved_more_like_action_starts_a_new_request():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    assert "function beginSimilarSearch(artwork)" in js
+    assert "window.ART_CONCIERGE_PAGE === 'saved' && /^More like/i.test(text)" in js
+    assert "window.location.assign('/results?intent=discover&run=1')" in js
+    assert "request.inspiration_image_ids = []" in js
+
+
+def test_saved_artwork_preview_fallback_tries_source_page_before_direct_url():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    start = js.index("function bindArtworkImageFallbacks(root)")
+    end = js.index("function artworkPreviewUrl(detailUrl)", start)
+    fallback = js[start:end]
+    assert fallback.index("image.src = `/api/artwork-preview?url=") < fallback.index("image.src = originalSrc")
+
+
+def test_qloo_ignores_avoid_references_and_visual_subjects(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import services.agent as agent
+    from models.schemas import ConciergeRequest, Intent
+
+    async def check():
+        queries = []
+        async def fake_search(query):
+            queries.append(query)
+            return [{"id": f"entity:{query}", "name": query}]
+        monkeypatch.setattr(agent, "search_entities", fake_search)
+        request = ConciergeRequest(
+            intent=Intent.taste,
+            loves=["Radiohead"],
+            avoid_references=["Beyonce"],
+            art_interests=["birds", "watercolour painting"],
+            additional_interests=["Issey Miyake"],
+            goal="Develop my taste",
+        )
+        signals = SimpleNamespace(cultural_references=["Beyonce", "Radiohead"], art_interests=["birds"])
+        await agent._resolve_entities(request, [], signals)
+        assert queries == ["Radiohead", "Issey Miyake"]
+
+    asyncio.run(check())
+
+
+def test_cultural_art_directions_only_boost_matching_work_metadata():
+    from models.schemas import ConciergeRequest, Intent
+    from services.agent import _deterministic_score
+    from services.art_sources import Artwork
+
+    request = ConciergeRequest(intent=Intent.discover, goal="Explore art", discovery_level=50)
+    work = Artwork(
+        id="test:composition", title="Experimental composition", artist="A. Example",
+        image_url="https://example.com/art.jpg", detail_url="https://example.com/work",
+        source="Test collection", source_kind="institution", availability="not_for_sale",
+        price=None, currency=None, medium="mixed media", dimensions=None, year=None,
+        description="Layered, expressive forms.",
+    )
+    baseline = _deterministic_score(work, request, [], "contemporary art")
+    culturally_relevant = _deterministic_score(
+        work, request, [], "contemporary art", ["experimental composition", "expressive forms"]
+    )
+    assert culturally_relevant > baseline

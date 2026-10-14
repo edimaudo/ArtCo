@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from models.schemas import ConciergeRequest, Intent
 import services.agent as agent
 from services.art_sources import Artwork
+from services.llm import RequestSignals
 
 
 class FakeProvider:
@@ -31,7 +32,7 @@ async def main():
 
     async def fake_extract(goal, existing_loves, existing_interests, avoid_references=None):
         calls["extract"].append(goal)
-        return SimpleNamespace(
+        return RequestSignals(
             cultural_references=["Issey Miyake", "Radiohead"], art_interests=["minimalism"],
             mediums=["painting"], room="living room", size_preference=None, market="Canada",
             budget_min=None, budget_max=5000, number_of_works=1,
@@ -48,36 +49,12 @@ async def main():
         calls["plan"].append(args[1])
         return SimpleNamespace(queries=["Test Artist", "minimalist painting"])
 
-    review_calls = 0
-    async def fake_review(intent, user_request, candidates, discovery_level, purchase_required, number_of_works):
-        nonlocal review_calls
-        review_calls += 1
-        calls["review"].append(user_request)
-        assert isinstance(candidates, list)
-        assert isinstance(discovery_level, int)
-        assert isinstance(purchase_required, bool)
-        assert isinstance(number_of_works, int)
-        return SimpleNamespace(
-            assessments=[
-                SimpleNamespace(artwork_id="commercial-1", score=92, fit_reason="Strong brief fit.", concern=""),
-                SimpleNamespace(artwork_id="institution-1", score=80, fit_reason="Good cultural fit.", concern="Not purchasable."),
-            ],
-            follow_up_queries=["minimalist portrait"],
-            critique="The brief is covered by commercial and institutional options.",
-            coverage="Good coverage.",
-        )
-
-
+    request_goal = "Find me something calm for my living room under $5,000, inspired by the design I like."
     commercial = FakeProvider("Commercial", {
-        "Test Artist": [work("commercial-1", "Test Artist", "commercial", "available", 3200)],
-        "minimalist painting": [],
-        "minimalist portrait": [],
+        request_goal: [work("commercial-1", "Test Artist", "commercial", "available", 3200)],
     })
     institutional = FakeProvider("Institution", {
-        "Test Artist": [work("institution-1", "Test Artist")],
-        "minimalist painting": [work("institution-1", "Test Artist")],
-        "contemporary art for sale": [work("institution-2", "Another Artist")],
-        "minimalist portrait": [work("institution-2", "Another Artist")],
+        "minimalism": [work("institution-1", "Another Artist")],
     })
 
     original = {
@@ -85,7 +62,6 @@ async def main():
         "search_entities": agent.search_entities,
         "get_artist_insights": agent.get_artist_insights,
         "plan_art_searches": agent.plan_art_searches,
-        "review_candidates": agent.review_candidates,
         "commercial_providers": agent.commercial_providers,
         "institutional_providers": agent.institutional_providers,
     }
@@ -93,7 +69,6 @@ async def main():
     agent.search_entities = fake_search
     agent.get_artist_insights = fake_qloo
     agent.plan_art_searches = fake_plan
-    agent.review_candidates = fake_review
     agent.commercial_providers = lambda: [commercial]
     agent.institutional_providers = lambda: [institutional]
 
@@ -101,7 +76,7 @@ async def main():
         request = ConciergeRequest(
             intent=Intent.buy,
             loves=[],
-            goal="Find me something calm for my living room under $5,000, inspired by the design I like.",
+            goal=request_goal,
             discovery_level=50,
         )
         result = await agent.run_concierge(request)
@@ -110,13 +85,13 @@ async def main():
         assert "Radiohead" in calls["qloo_search"]
         assert result["results"][0]["id"] == "commercial-1"
         assert all(item["source_kind"] == "commercial" and item["availability"] == "available" for item in result["results"])
-        assert result["critique"] == "The brief is covered by commercial and institutional options."
-        assert review_calls == 1
+        assert calls["plan"], "Qloo associations should be translated into optional art-catalogue directions"
+        assert result["diagnostics"]["cultural_art_directions_used"] > 0
         assert result["not_for_sale"]
         assert all(item["image_url"] for item in result["results"] + result["not_for_sale"])
         print("agent smoke: PASS")
         print(f"qloo searches: {calls['qloo_search']}")
-        print(f"review passes: {review_calls}")
+        print(f"translated cultural directions: {result['diagnostics']['cultural_art_directions_used']}")
         print(f"primary results: {[item['id'] for item in result['results']]}")
         print(f"not-for-sale: {[item['id'] for item in result['not_for_sale']]}")
     finally:

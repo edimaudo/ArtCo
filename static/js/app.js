@@ -725,6 +725,29 @@
     window.location.assign(`/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`);
   }
 
+  function beginSimilarSearch(artwork) {
+    if (!artwork) return;
+    const title = String(artwork.title || 'this artwork').trim();
+    const artist = String(artwork.artist || '').trim();
+    const subject = [title, artist && `by ${artist}`].filter(Boolean).join(' ');
+    const prompt = `Find artworks similar to ${subject}. Prioritise related subject matter, visual style, medium, composition, and period. Do not return the exact same work.`;
+    const request = buildRequest(prompt, `More like ${artist || title}`, 'discover');
+    request.art_interests = [...new Set([title, artist, artwork.medium].filter((value) => typeof value === 'string' && value.trim()))].slice(0, 8);
+    request.number_of_works = 3;
+    request.purchase_required = false;
+    // This action is anchored to the saved artwork, not any previously selected
+    // inspiration image that may still be in the one-tab request state.
+    request.inspiration_image_ids = [];
+    try {
+      sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
+    } catch (error) {
+      const count = $('#savedCount');
+      if (count) count.textContent = 'Could not start the search in this browser tab. Please allow session storage and try again.';
+      return;
+    }
+    window.location.assign('/results?intent=discover&run=1');
+  }
+
   async function runPendingRequest() {
     const resultsPage = $('#resultsPage');
     if (!resultsPage) return false;
@@ -806,11 +829,18 @@
     const box = $('#tasteSummary');
     if (!box) return;
     const inputs = data.taste?.inputs || [];
-    const artists = data.taste?.related_artists || [];
-    const tags = [...new Set([...inputs, ...artists.slice(0, 4).map((artist) => artist.name)].filter(Boolean))].slice(0, 8);
+    const visual = data.visual_inspiration?.visual_attributes || [];
+    const colours = data.visual_inspiration?.colour_palette || [];
+    const tags = [...new Set([...inputs, ...visual, ...colours].filter(Boolean))].slice(0, 8);
     if (!tags.length) { box.hidden = true; return; }
     box.hidden = false;
-    $('#tasteSummaryCopy').textContent = 'The search was shaped by the cultural references you have shared with your concierge.';
+    const hasCulturalInputs = inputs.length > 0;
+    const hasVisualInputs = visual.length > 0 || colours.length > 0;
+    $('#tasteSummaryCopy').textContent = hasCulturalInputs && hasVisualInputs
+      ? 'Your stated interests and visual references guided this search.'
+      : hasVisualInputs
+        ? 'The visual traits in your inspiration images guided this search.'
+        : 'Your stated interests guided this search.';
     $('#tasteTags').innerHTML = tags.map((tag) => `<span class="taste-tag">${escapeHtml(tag)}</span>`).join('');
   }
 
@@ -818,18 +848,19 @@
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
       const advanceFallback = () => {
-        // Try the original museum/gallery URL first if ArtCo's proxy failed;
-        // then parse the official artwork page for its primary image.
-        const originalSrc = image.dataset.originalSrc;
-        if (originalSrc && image.dataset.triedOriginalSrc !== 'true') {
-          image.dataset.triedOriginalSrc = 'true';
-          image.src = originalSrc;
-          return;
-        }
+        // The source page may publish a working image even when its raw API
+        // thumbnail blocks hotlinking. Try the same-origin page-preview proxy
+        // first, then fall back to the direct image URL.
         const detailUrl = image.dataset.detailUrl;
         if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
           image.dataset.triedDetailPreview = 'true';
           image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
+          return;
+        }
+        const originalSrc = image.dataset.originalSrc;
+        if (originalSrc && image.dataset.triedOriginalSrc !== 'true') {
+          image.dataset.triedOriginalSrc = 'true';
+          image.src = originalSrc;
           return;
         }
         const placeholder = document.createElement('div');
@@ -1099,6 +1130,10 @@
         const artwork = getArtworkById(feedback.dataset.id);
         const text = feedback.dataset.feedback || '';
         learnFromFeedback(text, artwork);
+        if (window.ART_CONCIERGE_PAGE === 'saved' && /^More like/i.test(text) && artwork) {
+          beginSimilarSearch(artwork);
+          return;
+        }
         const input = $('#feedback');
         if (input) { input.value = text; input.focus(); }
         return;

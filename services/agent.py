@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import replace
 from typing import Any
 
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .image_proxy import display_image_url, is_allowed_detail_url
-from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals
+from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -24,21 +25,20 @@ async def _resolve_entities(
     """Resolve both saved taste references and important references in the current request."""
     progress = {"label": "Understanding what matters to you", "state": "active"}
     status.append(progress)
-    queries = list(
-        dict.fromkeys(
-            [
-                *request.loves,
-                *request.avoid_references,
-                *signals.cultural_references,
-                *request.art_interests,
-                *request.additional_interests,
-            ]
-        )
-    )[:6]
-
-    # With no explicit references, allow Qloo to resolve the user's request itself.
-    if not queries and request.goal:
-        queries = [request.goal[:160]]
+    # Only positive cultural references belong in the taste graph. Art subjects
+    # (for example, "birds") are sent to artwork catalogues, while "avoid" values
+    # must never become positive Qloo signals. Resolving the entire natural-language
+    # request also creates weak cross-domain matches, so generic prompts are skipped.
+    avoid_lookup = {str(value).strip().casefold() for value in request.avoid_references if str(value).strip()}
+    positive_references = [
+        *request.loves,
+        *signals.cultural_references,
+        *request.additional_interests,
+    ]
+    queries = [
+        value for value in dict.fromkeys(str(value).strip() for value in positive_references)
+        if value and value.casefold() not in avoid_lookup
+    ][:6]
 
     async def resolve(query: str) -> tuple[str, list[dict[str, Any]], str | None]:
         try:
@@ -178,17 +178,28 @@ def _deterministic_score(
     request: ConciergeRequest,
     qloo_artists: list[dict[str, Any]],
     direction: str,
+    cultural_art_directions: list[str] | None = None,
 ) -> float:
-    haystack = " ".join(
-        part for part in [work.title, work.artist, work.medium, work.description, direction] if part
-    ).lower()
+    metadata_haystack = " ".join(
+        part for part in [work.title, work.artist, work.medium, work.description] if part
+    ).casefold()
+    haystack = f"{metadata_haystack} {direction}".casefold()
     score = 0.0
-    qloo_names = {str(item.get("name") or "").lower() for item in qloo_artists if item.get("name")}
-    avoid_names = {str(value).strip().lower() for value in request.avoid_references if str(value).strip()}
-    if work.artist.strip().lower() in avoid_names or any(value in work.artist.strip().lower() for value in avoid_names):
+    # The optional culture-to-art bridge translates Qloo associations into art
+    # catalogue terms. These terms only influence the score when they match
+    # actual artwork metadata, not merely the provider query string.
+    bridge_terms = set().union(*(_tokenize(value) for value in (cultural_art_directions or []))) if cultural_art_directions else set()
+    bridge_matches = sum(1 for token in bridge_terms if token in metadata_haystack)
+    score += min(12, bridge_matches * 2)
+    qloo_names = {str(item.get("name") or "").strip().casefold() for item in qloo_artists if item.get("name")}
+    avoid_names = {str(value).strip().casefold() for value in request.avoid_references if str(value).strip()}
+    artist_name = work.artist.strip().casefold()
+    if artist_name in avoid_names or any(value and value in artist_name for value in avoid_names):
         score -= 35
-    if work.artist.lower() in qloo_names or any(name and name in work.artist.lower() for name in qloo_names):
-        score += 18
+    # Do not award points for accidental substrings (e.g. a short culture name
+    # appearing inside a different visual artist's name).
+    if artist_name in qloo_names:
+        score += 8
     request_terms = set()
     for value in request.art_interests + request.mediums + request.additional_interests:
         request_terms.update(_tokenize(value))
@@ -394,6 +405,7 @@ def _select(
     request: ConciergeRequest,
     qloo_artists: list[dict[str, Any]],
     review: CandidateReview | None,
+    cultural_art_directions: list[str] | None = None,
 ) -> list[Artwork]:
     review_by_id = {item.artwork_id: item for item in (review.assessments if review else [])}
 
@@ -401,8 +413,8 @@ def _select(
         (work for work in works if _has_image_candidate(work)),
         key=lambda work: (
             1 if _usable_image_url(work.image_url) else 0,
-            review_by_id.get(work.id).score if work.id in review_by_id else _deterministic_score(work, request, qloo_artists, work.matched_direction or ""),
-            _deterministic_score(work, request, qloo_artists, work.matched_direction or ""),
+            review_by_id.get(work.id).score if work.id in review_by_id else _deterministic_score(work, request, qloo_artists, work.matched_direction or "", cultural_art_directions),
+            _deterministic_score(work, request, qloo_artists, work.matched_direction or "", cultural_art_directions),
         ),
         reverse=True,
     )
@@ -437,8 +449,23 @@ async def _qloo_context(
     return resolved, artists
 
 
+_GENERIC_SERVICE_PROMPTS = {
+    "develop my taste", "i want to develop my taste", "help me develop my taste",
+    "develop my taste in art", "discover", "discover art", "find", "find art",
+    "curate", "curate art", "buy", "buy art", "learn", "learn about art",
+    "tell me what you are looking for", "describe what you are looking for",
+}
+
+
+def _searchable_goal(request: ConciergeRequest) -> str:
+    """Exclude service labels so they do not masquerade as artwork search terms."""
+    goal = (request.goal or "").strip()
+    normalized = re.sub(r"[^a-z0-9]+", " ", goal.casefold()).strip()
+    return "" if normalized in _GENERIC_SERVICE_PROMPTS else goal[:140]
+
+
 def _fast_search_directions(request: ConciergeRequest) -> list[str]:
-    """Build catalogue-friendly queries without making a model call on the critical path."""
+    """Build catalogue-friendly queries without promoting broad culture inputs into art terms."""
     fallback_by_intent = {
         "buy": ["contemporary art for sale", "original contemporary painting"],
         "curate": ["contemporary painting", "art photography"],
@@ -450,10 +477,9 @@ def _fast_search_directions(request: ConciergeRequest) -> list[str]:
         ["contemporary art", "modern painting", "contemporary photography"],
     )
     explicit = [
-        (request.goal or "").strip()[:140],
+        _searchable_goal(request),
         *request.art_interests[:2],
         *request.mediums[:1],
-        *request.additional_interests[:1],
         *fallback,
     ]
     return list(dict.fromkeys(item for item in explicit if item))[:4]
@@ -474,7 +500,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 
     fallback_signals = RequestSignals(
         cultural_references=list(dict.fromkeys(
-            request.loves + request.additional_interests + request.art_interests
+            request.loves + request.additional_interests
         ))[:10],
         art_interests=request.art_interests[:8],
         mediums=request.mediums[:6],
@@ -499,10 +525,48 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         asyncio.create_task(analyze_inspiration_images(request.goal or "", request.inspiration_images))
         if request.inspiration_images else None
     )
-    qloo_task = asyncio.create_task(_qloo_context(request, fallback_signals, status))
+    async def qloo_after_signal_extraction() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        # Qloo should resolve only references extracted from the current brief and
+        # explicit positive taste. Give extraction a short opportunity to finish;
+        # if the model is slow, use explicit profile fields rather than querying
+        # the entire sentence and accidentally resolving an unrelated entity.
+        try:
+            qloo_signals = await asyncio.wait_for(asyncio.shield(signals_task), timeout=0.9)
+            if not isinstance(qloo_signals, RequestSignals):
+                raw_signals = qloo_signals.model_dump() if hasattr(qloo_signals, "model_dump") else vars(qloo_signals)
+                qloo_signals = RequestSignals.model_validate(raw_signals)
+        except Exception:
+            qloo_signals = fallback_signals
+        return await _qloo_context(request, qloo_signals, status)
+
+    qloo_task = asyncio.create_task(qloo_after_signal_extraction())
+
+    async def qloo_art_direction_bridge() -> list[str]:
+        """Translate Qloo cultural associations into art terms without blocking results."""
+        try:
+            resolved_items, related_artists = await asyncio.wait_for(asyncio.shield(qloo_task), timeout=2.8)
+            if not resolved_items or not related_artists:
+                return []
+            planner_signals = fallback_signals
+            if signals_task.done() and not signals_task.cancelled() and signals_task.exception() is None:
+                candidate_signals = signals_task.result()
+                try:
+                    planner_signals = candidate_signals if isinstance(candidate_signals, RequestSignals) else RequestSignals.model_validate(
+                        candidate_signals.model_dump() if hasattr(candidate_signals, "model_dump") else candidate_signals
+                    )
+                except Exception:
+                    planner_signals = fallback_signals
+            return await _build_search_plan(request, planner_signals, related_artists, status)
+        except Exception as exc:
+            logger.debug("Optional Qloo-to-art translation skipped (%s)", type(exc).__name__)
+            return []
+
+    qloo_direction_task = asyncio.create_task(qloo_art_direction_bridge())
     early_enrichment = [signals_task] + ([visual_task] if visual_task else [])
     if early_enrichment:
-        await asyncio.wait(early_enrichment, timeout=0.35)
+        # Vision needs a realistic share of the deadline: 350 ms caused uploaded
+        # images to be omitted from the initial catalogue queries almost every time.
+        await asyncio.wait(early_enrichment, timeout=1.1 if visual_task else 0.55)
     early_signals = signals_task.result() if signals_task.done() and not signals_task.cancelled() and signals_task.exception() is None else fallback_signals
     if not isinstance(early_signals, RequestSignals):
         try:
@@ -514,18 +578,19 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     else:
         early_visual = None
     fallback_directions = _fast_search_directions(request)
+    search_goal = _searchable_goal(request)
     directions = list(dict.fromkeys([
-        (request.goal or "").strip()[:140],
-        *((early_visual.search_terms[:2] if early_visual else [])),
-        *early_signals.art_interests[:1],
-        *request.art_interests[:1],
+        search_goal,
+        *((early_visual.search_terms[:3] if early_visual else [])),
+        *((early_visual.visual_attributes[:1] if early_visual else [])),
+        *early_signals.art_interests[:2],
+        *request.art_interests[:2],
         *request.mediums[:1],
-        *early_signals.cultural_references[:1],
-        *[item for item in fallback_directions if item != (request.goal or "").strip()[:140]],
+        *[item for item in fallback_directions if item != search_goal],
     ]))[:4]
     directions = [direction for direction in directions if direction]
     research_task = asyncio.create_task(_research(directions, request, status))
-    tasks = [research_task, signals_task, qloo_task] + ([visual_task] if visual_task else [])
+    tasks = [research_task, signals_task, qloo_task, qloo_direction_task] + ([visual_task] if visual_task else [])
 
     # Only the catalogue search is on the critical path. Enrichment shares its
     # runtime, but never delays the response after the art sources have answered.
@@ -540,7 +605,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     # Give concurrent enrichment a small grace period after the catalogue result
     # is ready, but preserve the overall response deadline.
     optional_pending = [task for task in tasks if task is not research_task and not task.done()]
-    grace = min(0.35, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
+    grace = min(0.55, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
     if optional_pending and grace > 0:
         await asyncio.wait(optional_pending, timeout=grace)
     pending = [task for task in tasks if not task.done()]
@@ -573,6 +638,8 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 
     qloo_result = completed_result(qloo_task, ([], []))
     resolved, qloo_artists = qloo_result if isinstance(qloo_result, tuple) and len(qloo_result) == 2 else ([], [])
+    cultural_art_directions = completed_result(qloo_direction_task, [])
+    cultural_art_directions = [str(item).strip() for item in cultural_art_directions if isinstance(item, str) and item.strip()][:8]
 
     if visual_analysis:
         visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes]
@@ -601,7 +668,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     # Deterministic fit scoring is immediate; model-based candidate review was
     # removed from the blocking path because it added a second serial LLM round.
     review = None
-    selected = _select(works, request, qloo_artists, review)
+    selected = _select(works, request, qloo_artists, review, cultural_art_directions)
     review_data = _review_map(review)
     purchasable = [
         work for work in works
@@ -652,6 +719,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "source_diagnostics": source_diagnostics,
             "entity_matches_found": len(resolved),
             "related_artists_found": len(qloo_artists),
+            "cultural_art_directions_used": len(cultural_art_directions),
         },
         "summary": intent_summary,
         "visual_inspiration": {
@@ -688,10 +756,11 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "related_artists": qloo_artists[:8],
         },
         "search_directions": directions,
+        "cultural_art_directions": cultural_art_directions,
         "search_directions_used": list(dict.fromkeys(item.get("label", "") for item in status if item.get("label"))),
         "critique": review_data.get("critique", ""),
-        "results": [_serialize(work, request, qloo_artists, review_data) for work in primary],
-        "not_for_sale": [_serialize(work, request, qloo_artists, review_data) for work in secondary],
+        "results": [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in primary],
+        "not_for_sale": [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in secondary],
         "purchase_available": len(purchasable),
         "commercial_found": sum(work.source_kind == "commercial" for work in works),
         "institutional_found": sum(work.source_kind == "institution" for work in works),
@@ -705,6 +774,7 @@ def _serialize(
     request: ConciergeRequest,
     qloo_artists: list[dict[str, Any]],
     review_data: dict[str, Any],
+    cultural_art_directions: list[str] | None = None,
 ) -> dict[str, Any]:
     assessment = review_data.get("assessments", {}).get(work.id) or {}
     reasons: list[str] = []
@@ -713,9 +783,13 @@ def _serialize(
         reasons.append(str(fit_reason))
 
     matching_artist = next(
-        (item for item in qloo_artists if item.get("name") and str(item.get("name")).lower() in work.artist.lower()),
+        (item for item in qloo_artists if item.get("name") and str(item.get("name")).strip().casefold() == work.artist.strip().casefold()),
         None,
     )
+    bridge_terms = set().union(*(_tokenize(value) for value in (cultural_art_directions or []))) if cultural_art_directions else set()
+    metadata = " ".join(part for part in [work.title, work.artist, work.medium, work.description] if part).casefold()
+    if bridge_terms and any(token in metadata for token in bridge_terms) and len(reasons) < 2:
+        reasons.append("Shares artistic qualities connected to your broader interests")
     if matching_artist and len(reasons) < 2:
         reasons.append("Connects with your broader cultural taste")
     if request.discovery_level >= 70 and len(reasons) < 2:

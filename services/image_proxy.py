@@ -14,6 +14,9 @@ ALLOWED_EXACT_HOSTS = {
     "d7hftxdivxxvm.cloudfront.net",  # Artlogic / hosted gallery thumbnails
     "cdn.shopify.com",
     "images.ctfassets.net",
+    "cdn.collect24.art",
+    "images.collect24.art",
+    "media.collect24.art",
 }
 ALLOWED_HOST_SUFFIXES = (
     ".artic.edu",
@@ -27,6 +30,7 @@ ALLOWED_HOST_SUFFIXES = (
     ".ctfassets.net",
     ".imgix.net",
     ".artlogic.net",
+    ".collect24.art",
 )
 
 ALLOWED_DETAIL_HOSTS = {
@@ -35,9 +39,10 @@ ALLOWED_DETAIL_HOSTS = {
     "clevelandart.org", "www.clevelandart.org",
     "rijksmuseum.nl", "www.rijksmuseum.nl",
     "artsy.net", "www.artsy.net",
+    "collect24.art", "www.collect24.art",
 }
 ALLOWED_DETAIL_HOST_SUFFIXES = (
-    ".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net", ".artlogic.net"
+    ".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net", ".artlogic.net", ".collect24.art"
 )
 
 
