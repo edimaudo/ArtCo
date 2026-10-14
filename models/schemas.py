@@ -57,6 +57,7 @@ class ConciergeRequest(BaseModel):
     goal: str | None = Field(default=None, max_length=500)
     number_of_works: int = Field(default=1, ge=1, le=8)
     feedback: str | None = Field(default=None, max_length=500)
+    exclude_artwork_ids: list[str] = Field(default_factory=list, max_length=20)
     inspiration_image_ids: list[str] = Field(default_factory=list, max_length=5)
     inspiration_images: list[InspirationImage] = Field(default_factory=list, max_length=5)
 

@@ -409,8 +409,26 @@ def _select(
 ) -> list[Artwork]:
     review_by_id = {item.artwork_id: item for item in (review.assessments if review else [])}
 
+    excluded_ids = {str(value).strip() for value in request.exclude_artwork_ids if str(value).strip()}
+    avoided_artist_refs = [
+        " ".join(re.findall(r"[a-z0-9]+", str(value).lower()))
+        for value in request.avoid_references
+        if str(value).strip()
+    ]
+
+    def candidate_is_avoided(work: Artwork) -> bool:
+        if work.id in excluded_ids:
+            return True
+        artist = " ".join(re.findall(r"[a-z0-9]+", str(work.artist or "").lower()))
+        if not artist or re.fullmatch(r"(unknown|anonymous|various) artist", artist):
+            return False
+        return any(
+            reference and (artist == reference or f" {reference} " in f" {artist} ")
+            for reference in avoided_artist_refs
+        )
+
     ranked = sorted(
-        (work for work in works if _has_image_candidate(work)),
+        (work for work in works if _has_image_candidate(work) and not candidate_is_avoided(work)),
         key=lambda work: (
             1 if _usable_image_url(work.image_url) else 0,
             review_by_id.get(work.id).score if work.id in review_by_id else _deterministic_score(work, request, qloo_artists, work.matched_direction or "", cultural_art_directions),

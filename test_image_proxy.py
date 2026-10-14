@@ -118,7 +118,7 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
 def test_inspiration_selected_ids_are_not_persisted_to_localstorage():
     from pathlib import Path
     js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
-    assert "putInspirationSetting('selectedIds', state.inspiration.selectedIds)" in js
+    assert "putInspirationSetting('selectedIds', state.inspiration.selectedIds)" not in js
     assert "localStorage.setItem(storage.selectedInspiration" not in js
 
 
@@ -315,3 +315,41 @@ def test_cultural_art_directions_only_boost_matching_work_metadata():
         work, request, [], "contemporary art", ["experimental composition", "expressive forms"]
     )
     assert culturally_relevant > baseline
+
+
+def test_not_for_me_starts_search_with_work_exclusion_and_artist_avoid():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    schema = (Path(__file__).resolve().parent / "models/schemas.py").read_text()
+    agent = (Path(__file__).resolve().parent / "services/agent.py").read_text()
+    assert "function beginNotForMeSearch(artwork, button = null)" in js
+    assert "beginNotForMeSearch(artwork, feedback)" in js
+    assert "request.exclude_artwork_ids = [String(artwork.id || '')]" in js
+    assert "exclude_artwork_ids: list[str] = Field(default_factory=list, max_length=20)" in schema
+    assert "not candidate_is_avoided(work)" in agent
+
+
+def test_not_for_me_candidate_selection_excludes_exact_work_and_artist():
+    from models.schemas import ConciergeRequest, Intent
+    from services.agent import _select
+    from services.art_sources import Artwork
+
+    def work(work_id, title, artist):
+        return Artwork(
+            id=work_id, title=title, artist=artist, image_url="https://images.metmuseum.org/object.jpg",
+            detail_url="https://www.metmuseum.org/art/collection/search/1", source="Test museum",
+            source_kind="institution", availability="not_for_sale", price=None, currency=None,
+            medium="oil on canvas", dimensions=None, year=None, description=None,
+        )
+
+    candidates = [
+        work("test:disliked", "Disliked work", "Ada Example"),
+        work("test:same-artist", "Another work", "Ada Example"),
+        work("test:other-artist", "Alternative work", "Bea Artist"),
+    ]
+    request = ConciergeRequest(
+        intent=Intent.discover, goal="Find alternatives", avoid_references=["Ada Example"],
+        exclude_artwork_ids=["test:disliked"],
+    )
+    selected = _select(candidates, request, [], None)
+    assert [item.id for item in selected] == ["test:other-artist"]
