@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from models.schemas import ConciergeRequest
 from services.concierge import run
-from services.payments import PaymentUnavailable, PaymentConfigurationError, create_checkout_session, parse_webhook, verify_webhook_signature
+from services.payments import PaymentUnavailable, PaymentConfigurationError, CheckoutSessionNotFound, create_checkout_session, retrieve_checkout_session, parse_webhook, verify_webhook_signature
 from services.image_proxy import is_allowed_detail_url, is_allowed_image_url
 from services.config import REQUEST_TIMEOUT
 
@@ -65,7 +65,12 @@ async def taste_page(request: Request) -> RedirectResponse:
 
 @app.get("/checkout/success", response_class=HTMLResponse)
 async def checkout_success(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="checkout_status.html", context={"page": "checkout", "status": "success"})
+    # A redirect to this URL proves only that the browser returned from Stripe.
+    # The page must verify the Checkout Session before telling the buyer payment succeeded.
+    return templates.TemplateResponse(request=request, name="checkout_status.html", context={
+        "page": "checkout", "status": "verify",
+        "session_id": request.query_params.get("session_id", ""),
+    })
 
 
 @app.get("/checkout/cancel", response_class=HTMLResponse)
@@ -87,6 +92,21 @@ async def create_checkout(payload: dict[str, Any]) -> JSONResponse:
     except Exception:
         return JSONResponse({"success": False, "detail": "Stripe Checkout could not be started."}, status_code=502)
     return JSONResponse({"success": True, "checkout_url": session.get("url"), "session_id": session.get("id")})
+
+
+@app.get("/api/checkout/status")
+async def checkout_status(session_id: str = "") -> JSONResponse:
+    """Verify a Checkout Session with Stripe and return a minimal buyer-safe status."""
+    try:
+        session = await retrieve_checkout_session(session_id)
+    except CheckoutSessionNotFound as exc:
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=404)
+    except PaymentUnavailable as exc:
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=409)
+    except Exception:
+        logger.exception("Could not verify Stripe Checkout Session")
+        return JSONResponse({"success": False, "detail": "Stripe could not verify this checkout right now. Try again shortly."}, status_code=502)
+    return JSONResponse({"success": True, **session})
 
 
 @app.post("/api/stripe/webhook")

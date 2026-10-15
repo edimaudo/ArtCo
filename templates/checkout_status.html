@@ -1,18 +1,21 @@
 {% extends "base.html" %}
-{% block title %}ArtCo | {% if status == 'success' %}Purchase started{% else %}Checkout cancelled{% endif %}{% endblock %}
+{% block title %}ArtCo | Purchase status{% endblock %}
 {% block content %}
 <section class="workspace-page shell checkout-page" aria-labelledby="checkoutStatusHeading">
-  <div class="checkout-status">
-    {% if status == 'success' %}
-      <h1 id="checkoutStatusHeading">Your checkout is complete.</h1>
-      <p class="lede">Payment was returned to ArtCo successfully. Keep this page as confirmation of the checkout handoff.</p>
+  <div class="checkout-status" id="checkoutStatusCard" data-session-id="{{ session_id|default('', true) }}" data-checkout-status="{{ status }}">
+    {% if status == 'verify' %}
+      <h1 id="checkoutStatusHeading">Checking your payment status…</h1>
+      <p class="lede" id="checkoutStatusMessage" role="status" aria-live="polite">ArtCo is checking the Checkout Session with Stripe. Returning to this page does not by itself confirm payment.</p>
+      <dl class="checkout-order-details" id="checkoutOrderDetails" hidden></dl>
+      <p class="action-message" id="checkoutStatusReference"></p>
       <div class="checkout-actions">
+        <button class="secondary-button" id="refreshCheckoutStatus" type="button">Check status again</button>
         <a class="primary-button" href="/dashboard">Back to dashboard</a>
         <a class="secondary-button" href="/saved">View saved art</a>
       </div>
     {% else %}
       <h1 id="checkoutStatusHeading">Checkout cancelled.</h1>
-      <p class="lede">No payment was completed. Your saved art and concierge requests are still available.</p>
+      <p class="lede" id="checkoutStatusMessage" role="status">No payment confirmation was received. You can return to your recommendations and try again.</p>
       <div class="checkout-actions">
         <a class="primary-button" href="/concierge">Ask my concierge</a>
         <a class="secondary-button" href="/saved">View saved art</a>

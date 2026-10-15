@@ -1236,3 +1236,60 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .checkout-page .checkout-status { margin-top: 8px; }
   .checkout-actions { flex-direction: column; align-items: stretch; }
 }
+
+/* Learn about art: an educational panel connected to the actual search results. */
+.learning-guide {
+  border: 1px solid var(--border, #dedbd5);
+  border-radius: 18px;
+  padding: clamp(18px, 3vw, 28px);
+  background: var(--surface, #fff);
+}
+.learning-guide-overview {
+  max-width: 82ch;
+  line-height: 1.75;
+  margin: 12px 0 22px;
+}
+.learning-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.learning-guide-grid > section {
+  min-width: 0;
+  border-top: 1px solid var(--border, #dedbd5);
+  padding-top: 14px;
+}
+.learning-guide-grid h3,
+.learning-examples h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+.learning-guide-grid ul {
+  margin: 0;
+  padding-left: 1.15rem;
+}
+.learning-guide-grid li {
+  padding: 0 0 8px 3px;
+  line-height: 1.55;
+}
+.learning-guide-grid dl { margin: 0; }
+.learning-term { margin: 0 0 12px; }
+.learning-term dt { font-weight: 650; margin-bottom: 3px; }
+.learning-term dd { margin: 0; line-height: 1.5; color: var(--muted, #5d5a56); }
+.learning-examples { margin-top: 23px; border-top: 1px solid var(--border, #dedbd5); padding-top: 18px; }
+.learning-examples-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.learning-example { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 13px; border: 1px solid var(--border, #dedbd5); border-radius: 12px; min-width: 0; }
+.learning-example strong { line-height: 1.4; }
+.learning-example span { line-height: 1.4; }
+.learning-example small { color: var(--muted, #5d5a56); line-height: 1.45; }
+.learning-example a { margin-top: 4px; font-size: .86rem; }
+.learning-source-note { font-size: .8rem; line-height: 1.55; color: var(--muted, #5d5a56); margin: 18px 0 0; }
+.checkout-order-details { display: grid; gap: 0; max-width: 620px; margin: 22px 0; border-top: 1px solid var(--border, #dedbd5); }
+.checkout-order-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 1.5fr); gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border, #dedbd5); }
+.checkout-order-row dt { color: var(--muted, #5d5a56); }
+.checkout-order-row dd { margin: 0; overflow-wrap: anywhere; }
+#checkoutStatusReference { font-size: .82rem; color: var(--muted, #5d5a56); overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .learning-guide-grid, .learning-examples-list { grid-template-columns: minmax(0, 1fr); }
+  .checkout-order-row { grid-template-columns: 1fr; gap: 4px; }
+}

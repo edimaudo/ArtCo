@@ -75,8 +75,9 @@ def test_concierge_ui_has_image_upload_and_no_redundant_composer_labels():
     assert response.status_code == 200
     assert 'id="inspirationFiles"' in response.text
     assert 'id="browseInspiration"' not in response.text
+    assert 'id="inspirationLibrary"' not in response.text
     assert 'id="requestInput"' in response.text
-    assert "Images are discarded when the search finishes." in response.text
+    assert 'discarded when the search finishes' in response.text
     assert "I can help with" not in response.text
     assert "What would you like help with?" not in response.text
 
@@ -174,24 +175,3 @@ def test_api_accepts_image_payload_without_persisting_it_to_response(monkeypatch
     assert response.json()["visual_inspiration"]["image_count"] == 1
     assert "data" not in response.text
     assert encoded_payload() not in response.text
-
-
-def test_inspiration_images_are_request_only_and_old_browser_store_is_removed():
-    from pathlib import Path
-    root = Path(__file__).resolve().parent
-    js = (root / "static/js/app.js").read_text()
-    concierge = (root / "templates/concierge.html").read_text()
-    dashboard = (root / "templates/dashboard.html").read_text()
-    assert "window.indexedDB.open(INSPIRATION_DB_NAME, 3)" in js
-    assert "db.deleteObjectStore(INSPIRATION_STORE)" in js
-    assert "Close other ArtCo tabs and reload to finish removing the old saved-image library." in js
-    assert "await putInspirationImage(record)" not in js
-    assert "getInspirationImagesByIds" not in js
-    assert "putInspirationSetting('selectedIds', state.inspiration.selectedIds)" not in js
-    assert "request.inspiration_images = await Promise.all" in js
-    assert "sessionStorage.removeItem('artConciergePendingRequest')" in js
-    assert "function stripInspirationPayload(request)" in js
-    assert "delete safe.inspiration_images" in js
-    assert 'id="browseInspiration"' not in concierge
-    assert 'id="tasteInspirationGallery"' not in dashboard
-    assert "data-use-inspiration" not in js

@@ -8,13 +8,13 @@
     last: null,
     preferences: { theme: 'light', fontScale: 'md' },
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
-    inspiration: { selectedIds: [], images: [], preparing: false },
+    inspiration: { images: [], preparing: false },
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const INSPIRATION_DB_NAME = 'artCoInspirationDB';
-  const INSPIRATION_STORE = 'images';
+  const INSPIRATION_STORE = 'images'; // deleted by the v3 migration; never used for writes
   const INSPIRATION_SETTINGS_STORE = 'settings';
   const MAX_REQUEST_IMAGES = 5;
   const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -23,17 +23,20 @@
   let inspirationDbPromise = null;
 
   function openInspirationDb() {
-    if (!('indexedDB' in window)) return Promise.reject(new Error('This browser does not support local app preferences.'));
+    if (!('indexedDB' in window)) return Promise.reject(new Error('This browser does not support local image storage.'));
     if (inspirationDbPromise) return inspirationDbPromise;
     inspirationDbPromise = new Promise((resolve, reject) => {
       const request = window.indexedDB.open(INSPIRATION_DB_NAME, 3);
       request.onupgradeneeded = () => {
         const db = request.result;
-        // Version 3 removes the old persistent inspiration-image store. Images are
-        // request-only and must not survive a search or browser navigation.
+        const transaction = request.transaction;
+        // Migrate older ArtCo builds by deleting the persistent inspiration-image
+        // store and its selected-image setting. Images are now request-only.
         if (db.objectStoreNames.contains(INSPIRATION_STORE)) db.deleteObjectStore(INSPIRATION_STORE);
         if (!db.objectStoreNames.contains(INSPIRATION_SETTINGS_STORE)) {
           db.createObjectStore(INSPIRATION_SETTINGS_STORE, { keyPath: 'key' });
+        } else if (transaction) {
+          transaction.objectStore(INSPIRATION_SETTINGS_STORE).delete('selectedIds');
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -60,24 +63,6 @@
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(new Error('Could not save the inspiration settings.'));
     });
-  }
-
-  async function deleteInspirationSetting(key) {
-    const db = await openInspirationDb();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(INSPIRATION_SETTINGS_STORE, 'readwrite');
-      transaction.objectStore(INSPIRATION_SETTINGS_STORE).delete(key);
-      transaction.oncomplete = resolve;
-      transaction.onerror = () => reject(new Error('Could not clear old inspiration metadata.'));
-    });
-  }
-
-  function stripInspirationPayload(request) {
-    if (!request || typeof request !== 'object') return request;
-    const safe = { ...request };
-    delete safe.inspiration_images;
-    delete safe.inspiration_image_ids;
-    return safe;
   }
 
   function appStateSnapshot() {
@@ -110,54 +95,23 @@
           updatedAt: profile.updatedAt || null,
         };
         state.saved = Array.isArray(existing.saved) ? existing.saved.slice(0, 40) : [];
-        state.recent = Array.isArray(existing.recent) ? existing.recent.slice(0, 8).map((item) => ({
-          ...item,
-          request: stripInspirationPayload(item.request),
-          data: item.data && typeof item.data === 'object' ? {
-            ...item.data, request: stripInspirationPayload(item.data.request),
-          } : item.data,
-        })) : [];
+        state.recent = Array.isArray(existing.recent) ? existing.recent.slice(0, 8) : [];
         state.last = existing.last || null;
-        if (state.last?.request) state.last.request = stripInspirationPayload(state.last.request);
         state.preferences = {
           theme: existing.preferences?.theme === 'dark' ? 'dark' : 'light',
           fontScale: ['sm', 'md', 'lg'].includes(existing.preferences?.fontScale) ? existing.preferences.fontScale : 'md',
         };
       } else {
-        // IndexedDB stores profile/app state only. Inspiration images are never persisted.
+        // App profile/results persist locally; user-supplied inspiration images do not.
         await putInspirationSetting('appState', appStateSnapshot());
       }
       state.inspiration.images = [];
-      state.inspiration.selectedIds = [];
-      // Delete legacy image-selection metadata and rewrite any old history without image IDs.
-      await deleteInspirationSetting('selectedIds');
-      await putInspirationSetting('appState', appStateSnapshot());
+      state.inspiration.preparing = false;
     } catch (error) {
       // Continue with the in-memory defaults if browser storage is unavailable.
       // No server account or cross-device sync is implied.
-      console.warn('ArtCo could not load its browser state.', error);
-      if (/Close another ArtCo tab/i.test(String(error?.message || ''))) {
-        const status = $('#inspirationMessage');
-        if (status) status.textContent = 'Close other ArtCo tabs and reload to finish removing the old saved-image library. New uploads are not saved.';
-      }
+      console.warn('ArtCo could not load its browser library.', error);
     }
-  }
-
-  function saveSelectedInspiration() {
-    // Selection is page memory only. It is intentionally not written to IndexedDB.
-    state.inspiration.images = state.inspiration.images.slice(0, MAX_REQUEST_IMAGES);
-    state.inspiration.selectedIds = state.inspiration.images.map((image) => image.id);
-  }
-
-  function clearCurrentInspirationImages() {
-    clearInspirationObjectUrls();
-    state.inspiration.images = [];
-    state.inspiration.selectedIds = [];
-    state.inspiration.preparing = false;
-    const selectedWrap = $('#selectedInspirationList');
-    if (selectedWrap) selectedWrap.innerHTML = '';
-    const files = $('#inspirationFiles');
-    if (files) files.value = '';
   }
 
   function clearInspirationObjectUrls() {
@@ -342,22 +296,28 @@
       </article>`;
   }
 
+  function clearCurrentInspirationImages() {
+    clearInspirationObjectUrls();
+    state.inspiration.images = [];
+    state.inspiration.preparing = false;
+    const selectedWrap = $('#selectedInspirationList');
+    if (selectedWrap) selectedWrap.innerHTML = '';
+    const files = $('#inspirationFiles');
+    if (files) files.value = '';
+  }
+
   function renderInspirationUI() {
     const selectedWrap = $('#selectedInspirationList');
     if (!selectedWrap) return;
     clearInspirationObjectUrls();
-    saveSelectedInspiration();
-    selectedWrap.innerHTML = state.inspiration.images.map((record) => {
-      const url = imageObjectUrl(record);
-      return `<article class="selected-inspiration-item">
-        <img src="${escapeAttribute(url)}" alt="${escapeAttribute(record.name)}" loading="lazy" decoding="async">
+    const records = state.inspiration.images.slice(0, MAX_REQUEST_IMAGES);
+    selectedWrap.innerHTML = records.map((record) => `
+      <article class="selected-inspiration-item">
+        <img src="${escapeAttribute(imageObjectUrl(record))}" alt="${escapeAttribute(record.name)}" loading="lazy" decoding="async">
         <div class="selected-inspiration-copy"><span>${escapeHtml(record.name)}</span><button class="text-button" type="button" data-remove-selected-image="${escapeAttribute(record.id)}">Remove</button></div>
-      </article>`;
-    }).join('');
+      </article>`).join('');
     const status = $('#inspirationMessage');
-    if (status && state.inspiration.images.length && !status.textContent) {
-      status.textContent = `${state.inspiration.images.length} image${state.inspiration.images.length === 1 ? '' : 's'} attached to this search only. ArtCo discards them when the search finishes.`;
-    }
+    if (status && !state.inspiration.preparing && records.length === 0) status.textContent = '';
   }
 
   async function handleInspirationUpload(fileList) {
@@ -365,36 +325,40 @@
     if (!files.length) return;
     const status = $('#inspirationMessage');
     const errors = [];
-    let added = 0;
-    for (const file of files) {
-      if (state.inspiration.images.length >= MAX_REQUEST_IMAGES) {
-        errors.push(`A request can use at most ${MAX_REQUEST_IMAGES} images. Remove an image before adding another.`);
-        break;
+    let addedCount = 0;
+    state.inspiration.preparing = true;
+    try {
+      for (const file of files) {
+        if (state.inspiration.images.length >= MAX_REQUEST_IMAGES) {
+          errors.push(`Only ${MAX_REQUEST_IMAGES} images can be attached to one search.`);
+          break;
+        }
+        try {
+          if (status) status.textContent = `Preparing ${safeImageName(file.name)}…`;
+          const compressed = await compressInspirationImage(file);
+          const record = {
+            id: (window.crypto && typeof window.crypto.randomUUID === 'function') ? window.crypto.randomUUID() : `inspiration-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            name: safeImageName(file.name),
+            mimeType: 'image/jpeg',
+            blob: compressed.blob,
+            width: compressed.width,
+            height: compressed.height,
+            bytes: compressed.blob.size,
+            notes: '',
+          };
+          state.inspiration.images.push(record);
+          addedCount += 1;
+        } catch (error) {
+          errors.push(error.message || `${safeImageName(file.name)} could not be prepared.`);
+        }
       }
-      try {
-        if (status) status.textContent = `Preparing ${safeImageName(file.name)}…`;
-        const compressed = await compressInspirationImage(file);
-        const record = {
-          id: (window.crypto && typeof window.crypto.randomUUID === 'function') ? window.crypto.randomUUID() : `inspiration-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-          name: safeImageName(file.name),
-          mimeType: 'image/jpeg',
-          blob: compressed.blob,
-          width: compressed.width,
-          height: compressed.height,
-          bytes: compressed.blob.size,
-          notes: '',
-        };
-        state.inspiration.images.push(record);
-        added += 1;
-      } catch (error) {
-        errors.push(error.message || `${safeImageName(file.name)} could not be prepared.`);
-      }
+    } finally {
+      state.inspiration.preparing = false;
     }
-    saveSelectedInspiration();
     renderInspirationUI();
     if (status) {
-      const successText = added
-        ? `${added} image${added === 1 ? '' : 's'} attached to this search. Images are not saved to your profile and will be discarded when the search finishes.`
+      const successText = addedCount
+        ? `${addedCount} image${addedCount === 1 ? '' : 's'} attached to this search only. They will be discarded when this search finishes.`
         : '';
       status.textContent = [successText, ...errors].filter(Boolean).join(' ');
     }
@@ -492,27 +456,24 @@
   }
 
   function addProfileAvoid(value) {
-    const clean = String(value || '').trim().replace(/,$/, '');
-    if (!clean || /^(unknown|anonymous|various) artist$/i.test(clean)) return;
-    if (state.profile.avoids.some((item) => item.toLowerCase() === clean.toLowerCase())) return;
-    if (state.profile.avoids.length >= 12) state.profile.avoids.shift();
+    const clean = value.trim().replace(/,$/, '');
+    if (!clean || state.profile.avoids.includes(clean) || state.profile.avoids.length >= 12) return;
     state.profile.avoids.push(clean);
     state.profile.loves = state.profile.loves.filter((item) => item.toLowerCase() !== clean.toLowerCase());
     saveProfile();
   }
 
   function learnFromFeedback(feedback, artwork) {
-    if (!artwork) return;
-    const artist = String(artwork.artist || '').trim();
-    const knownArtist = artist && !/^(unknown|anonymous|various) artist$/i.test(artist);
-    if (/^More like/i.test(feedback || '') && knownArtist) {
+    if (!artwork?.artist) return;
+    const artist = artwork.artist.trim();
+    if (/^More like/i.test(feedback || '')) {
       if (!state.profile.loves.some((item) => item.toLowerCase() === artist.toLowerCase())) {
         state.profile.loves.push(artist);
       }
       state.profile.avoids = state.profile.avoids.filter((item) => item.toLowerCase() !== artist.toLowerCase());
       state.profile.loves = state.profile.loves.slice(-12);
       saveProfile();
-    } else if (/^Not for me/i.test(feedback || '') && knownArtist) {
+    } else if (/^Not for me/i.test(feedback || '')) {
       addProfileAvoid(artist);
     }
   }
@@ -553,14 +514,13 @@
       number_of_works: inferred === 'curate' ? 3 : 1,
       feedback,
       exclude_artwork_ids: [],
-      inspiration_image_ids: state.inspiration.images.map((image) => image.id).slice(0, MAX_REQUEST_IMAGES),
+      inspiration_image_ids: [],
       inspiration_images: [],
     };
   }
 
   async function beginRequest(prompt) {
     const clean = String(prompt || '').trim();
-    if (state.inspiration.preparing) return;
     if (!clean && state.inspiration.images.length === 0) {
       const input = $('#requestInput');
       if (input) {
@@ -574,31 +534,55 @@
     const params = new URLSearchParams(window.location.search);
     const inferred = params.has('intent') ? state.intent : inferIntent(clean);
     const request = buildRequest(clean, null, inferred);
-    const submit = $('#requestForm button[type="submit"]');
-    state.inspiration.preparing = true;
-    if (submit) { submit.disabled = true; submit.textContent = 'Preparing search…'; }
-    const status = $('#inspirationMessage');
     try {
       const selectedImages = state.inspiration.images.slice(0, MAX_REQUEST_IMAGES);
       request.inspiration_images = await Promise.all(selectedImages.map(async (record) => ({
         image_id: record.id,
         name: record.name,
         notes: record.notes || '',
-        mime_type: record.mimeType || record.blob.type || 'image/jpeg',
+        mime_type: record.mimeType || 'image/jpeg',
         data: await blobToBase64(record.blob),
       })));
       request.inspiration_image_ids = request.inspiration_images.map((image) => image.image_id);
-      // The payload exists only to cross this single navigation. The results page
-      // consumes and removes it before sending the one search request.
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
+      // Images live only long enough to cross the same-tab page navigation.
       clearCurrentInspirationImages();
       window.location.assign(`/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`);
     } catch (error) {
-      state.inspiration.preparing = false;
-      if (submit) { submit.disabled = false; submit.textContent = 'Ask my concierge →'; }
+      const status = $('#inspirationMessage');
       if (status) status.textContent = error?.name === 'QuotaExceededError'
-        ? 'These images could not be prepared for this search. Try fewer or smaller images.'
-        : (error.message || 'ArtCo could not prepare this search. Please try again.');
+        ? 'The selected images are too large for this browser tab to pass to the search. Remove one or choose smaller images.'
+        : (error.message || 'ArtCo could not prepare the request. Please try again.');
+    }
+  }
+
+  function beginNotForMeSearch(artwork, button = null) {
+    if (!artwork) return;
+    const title = String(artwork.title || 'this artwork').trim();
+    const artist = String(artwork.artist || '').trim();
+    const knownArtist = artist && !/^(unknown|anonymous|various) artist$/i.test(artist);
+    const prompt = knownArtist
+      ? `Find alternatives to “${title}” with a different visual direction. Do not recommend work by ${artist}.`
+      : `Find alternatives to “${title}” with a different visual direction. Do not return this artwork.`;
+    const request = buildRequest(prompt, `Not for me: ${knownArtist ? artist : title}`, 'discover');
+    request.exclude_artwork_ids = [String(artwork.id || '')].filter(Boolean).slice(0, 20);
+    request.avoid_references = [...new Set([
+      ...state.profile.avoids,
+      ...(knownArtist ? [artist] : []),
+    ])].slice(-12);
+    request.art_interests = [];
+    request.number_of_works = 3;
+    request.purchase_required = false;
+    request.inspiration_image_ids = [];
+    request.inspiration_images = [];
+    if (button) { button.disabled = true; button.textContent = 'Searching alternatives…'; }
+    try {
+      sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
+      window.location.assign('/results?intent=discover&run=1');
+    } catch (error) {
+      if (button) { button.disabled = false; button.textContent = 'Not for me'; }
+      const message = $('#resultsSummary');
+      if (message) message.textContent = 'Could not start a new search. Please try again.';
     }
   }
 
@@ -615,6 +599,7 @@
     // This action is anchored to the saved artwork, not any previously selected
     // inspiration image that may still be in the one-tab request state.
     request.inspiration_image_ids = [];
+    request.inspiration_images = [];
     try {
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
     } catch (error) {
@@ -625,68 +610,35 @@
     window.location.assign('/results?intent=discover&run=1');
   }
 
-  function beginNotForMeSearch(artwork, button = null) {
-    if (!artwork) return;
-    const title = String(artwork.title || 'this artwork').trim();
-    const artist = String(artwork.artist || '').trim();
-    const knownArtist = artist && !/^(unknown|anonymous|various) artist$/i.test(artist);
-    const prompt = knownArtist
-      ? `Show me different art from ${artist}. I did not like “${title}” by ${artist}; exclude this work and avoid this artist. Recommend different artists and a different direction.`
-      : `Show me different art from “${title}”. I did not like this work; exclude it and recommend alternatives with a different visual direction.`;
-    const request = buildRequest(prompt, `Not for me: ${knownArtist ? artist : title}`, 'discover');
-    request.exclude_artwork_ids = [String(artwork.id || '')].filter(Boolean).slice(0, 20);
-    request.avoid_references = [...new Set([
-      ...state.profile.avoids,
-      ...(knownArtist ? [artist] : []),
-    ])].slice(-12);
-    request.art_interests = [];
-    request.number_of_works = 3;
-    request.purchase_required = false;
-    request.inspiration_image_ids = [];
-    request.inspiration_images = [];
-    if (button) { button.disabled = true; button.textContent = 'Updating…'; }
-    try {
-      sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
-      window.location.assign('/results?intent=discover&run=1');
-    } catch (error) {
-      if (button) { button.disabled = false; button.textContent = 'Not for me'; }
-      const message = $('#resultsSummary') || $('#savedCount');
-      if (message) message.textContent = 'Could not apply that feedback. Please try again.';
-    }
-  }
-
   async function runPendingRequest() {
     const resultsPage = $('#resultsPage');
     if (!resultsPage) return false;
-    let raw = sessionStorage.getItem('artConciergePendingRequest');
+    const raw = sessionStorage.getItem('artConciergePendingRequest');
     if (!raw) return false;
     let payload;
     try { payload = JSON.parse(raw); } catch { sessionStorage.removeItem('artConciergePendingRequest'); return false; }
-    // Consume the one-time handoff immediately; image bytes are no longer in browser storage.
+    // Consume the one-time handoff before the API call. The image bytes are not
+    // retained in sessionStorage, the current result object, or recent-search history.
     sessionStorage.removeItem('artConciergePendingRequest');
-    raw = null;
 
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
     const resultsMeta = $('#resultsMeta');
     const grid = $('#artGrid');
     const notForSaleSection = $('#notForSaleSection');
-
     resultsHeading.textContent = 'I’m researching that now.';
-    resultsSummary.textContent = 'Your concierge is connecting your request with your existing taste and looking across the available art sources.';
+    resultsSummary.textContent = 'Your concierge is matching your brief against the available art sources.';
     resultsMeta.textContent = '';
     grid.innerHTML = '<p class="empty-state">Searching and narrowing the field…</p>';
     notForSaleSection.hidden = true;
 
-    const requestNotices = [];
     let apiPayload = null;
     try {
       apiPayload = {
         ...payload,
         inspiration_images: Array.isArray(payload.inspiration_images) ? payload.inspiration_images.slice(0, MAX_REQUEST_IMAGES) : [],
-        inspiration_image_ids: [],
+        inspiration_image_ids: Array.isArray(payload.inspiration_images) ? payload.inspiration_images.slice(0, MAX_REQUEST_IMAGES).map((image) => image.image_id) : [],
       };
-      apiPayload.inspiration_image_ids = apiPayload.inspiration_images.map((image) => image.image_id);
       const response = await fetch('/api/concierge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -697,15 +649,13 @@
         throw new Error(detail?.detail?.[0]?.msg || detail?.detail || `Request failed (${response.status})`);
       }
       const data = await response.json();
-      const historyRequest = stripInspirationPayload(payload);
+      const historyRequest = { ...payload };
+      delete historyRequest.inspiration_images;
+      delete historyRequest.inspiration_image_ids;
       data.request = historyRequest;
       saveLastResult(data);
       saveRecent(historyRequest, data);
       renderResults(data);
-      if (requestNotices.length) {
-        const summary = $('#resultsSummary');
-        if (summary) summary.textContent = `${summary.textContent} ${requestNotices.join(' ')}`;
-      }
       return true;
     } catch (error) {
       resultsHeading.textContent = 'I couldn’t complete that search.';
@@ -714,11 +664,10 @@
       grid.innerHTML = '<p class="empty-state">Check your connected services, then try the request again.</p>';
       return false;
     } finally {
-      // Release transient image bytes after this one request, on success or failure.
       if (apiPayload) apiPayload.inspiration_images = [];
       if (payload && typeof payload === 'object') {
-        payload.inspiration_images = [];
-        payload.inspiration_image_ids = [];
+        delete payload.inspiration_images;
+        delete payload.inspiration_image_ids;
       }
       apiPayload = null;
     }
@@ -821,6 +770,40 @@
       </article>`;
   }
 
+  function renderLearningGuide(guide, intent) {
+    const section = $('#learningGuideSection');
+    if (!section) return;
+    if (intent !== 'learn' || !guide || !guide.overview) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    $('#learningGuideTopic').textContent = guide.topic ? `A starting point: ${guide.topic}` : 'A starting point for exploring the subject';
+    $('#learningGuideOverview').textContent = guide.overview;
+    const list = (id, values) => {
+      const node = $(`#${id}`);
+      if (node) node.innerHTML = (values || []).map((value) => `<li>${escapeHtml(value)}</li>`).join('');
+    };
+    list('learningKeyIdeas', guide.key_ideas);
+    list('learningLookCloser', guide.look_closer);
+    list('learningQuestions', guide.questions);
+    const terms = $('#learningTerms');
+    if (terms) terms.innerHTML = (guide.terms || []).map((item) => `<div class="learning-term"><dt>${escapeHtml(item.term || '')}</dt><dd>${escapeHtml(item.definition || '')}</dd></div>`).join('');
+    const examplesSection = $('#learningExamplesSection');
+    const examples = $('#learningExamples');
+    const works = Array.isArray(guide.related_works) ? guide.related_works : [];
+    if (examplesSection && examples) {
+      examplesSection.hidden = works.length === 0;
+      examples.innerHTML = works.map((work) => {
+        const details = [work.medium, work.year, work.source].filter(Boolean).join(' · ');
+        const link = work.detail_url ? `<a href="${escapeAttribute(work.detail_url)}" target="_blank" rel="noopener noreferrer">View source record →</a>` : '';
+        return `<article class="learning-example"><strong>${escapeHtml(work.title || 'Untitled')}</strong><span>${escapeHtml(work.artist || 'Unknown artist')}</span><small>${escapeHtml(details)}</small>${link}</article>`;
+      }).join('');
+    }
+    const note = $('#learningSourceNote');
+    if (note) note.textContent = guide.source_note || '';
+  }
+
   function renderResults(data) {
     const intent = data.intent || state.intent;
     const labels = {
@@ -853,7 +836,9 @@
         ? (commercialConfigured
           ? 'I could not find purchase inventory in the connected commercial sources.'
           : 'No commercial art source is connected yet. Connect an acquisition source to search art available to buy.')
-        : 'The connected art collections did not return a match for that wording. Try a broader art style, artist, subject, or medium.';
+        : intent === 'learn'
+          ? 'The learning guide is available above, but the connected collections did not return an illustrated example for this topic. Try a movement, artist, period, subject, or medium.'
+          : 'The connected art collections did not return a match for that wording. Try a broader art style, artist, subject, or medium.';
       const failedSources = (diagnostic.source_diagnostics || [])
         .filter((source) => source.configured && (source.errors || []).length)
         .map((source) => `${source.provider} (${source.errors[0]})`);
@@ -871,6 +856,7 @@
         ? 'Additional works related to your brief, but not currently available to acquire.'
         : 'Additional works from museum and institutional collections. These are not available for purchase.';
     }
+    renderLearningGuide(data.learning_guide, intent);
     renderVisualInspirationSummary(data.visual_inspiration || {});
     renderTasteSummary(data);
   }
@@ -966,12 +952,74 @@
     }
   }
 
+  async function refreshCheckoutStatus() {
+    const card = $('#checkoutStatusCard');
+    if (!card) return;
+    const heading = $('#checkoutStatusHeading');
+    const message = $('#checkoutStatusMessage');
+    const details = $('#checkoutOrderDetails');
+    const reference = $('#checkoutStatusReference');
+    const sessionId = card.dataset.sessionId || new URLSearchParams(window.location.search).get('session_id') || '';
+    if (!sessionId) {
+      if (heading) heading.textContent = 'Payment status unavailable';
+      if (message) message.textContent = 'This return link does not include a Stripe Checkout Session ID, so ArtCo cannot verify payment.';
+      return;
+    }
+    const retry = $('#refreshCheckoutStatus');
+    if (retry) { retry.disabled = true; retry.textContent = 'Checking…'; }
+    try {
+      const response = await fetch(`/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`, { headers: { Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.detail || 'Stripe could not verify this checkout.');
+      const payment = String(data.payment_status || 'unpaid').toLowerCase();
+      const status = String(data.status || 'open').toLowerCase();
+      if (payment === 'paid' || payment === 'no_payment_required') {
+        if (heading) heading.textContent = 'Payment confirmed';
+        if (message) message.textContent = 'Stripe confirms this checkout is paid. Keep the checkout reference for any questions about the purchase.';
+      } else if (status === 'complete') {
+        if (heading) heading.textContent = 'Payment processing';
+        if (message) message.textContent = 'Stripe reports that checkout finished, but payment is not yet marked as paid. Check again shortly before treating this order as confirmed.';
+      } else if (status === 'expired') {
+        if (heading) heading.textContent = 'Checkout expired';
+        if (message) message.textContent = 'Stripe reports that this checkout session expired before payment was confirmed.';
+      } else {
+        if (heading) heading.textContent = 'Payment not confirmed';
+        if (message) message.textContent = 'Stripe has not marked this checkout as paid. You can return to the recommendations and start checkout again.';
+      }
+      if (details) {
+        const amount = Number.isFinite(Number(data.amount_total)) && data.amount_total !== null
+          ? new Intl.NumberFormat(undefined, { style: 'currency', currency: String(data.currency || 'CAD').toUpperCase() }).format(Number(data.amount_total) / 100)
+          : 'Not available';
+        const rows = [
+          ['Payment', payment === 'paid' || payment === 'no_payment_required' ? 'Paid' : payment === 'unpaid' ? 'Not paid' : payment],
+          ['Artwork reference', data.artwork_id || 'Not provided'],
+          ['Total', amount],
+          ['Checkout state', status],
+        ];
+        details.innerHTML = rows.map(([label, value]) => `<div class="checkout-order-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+        details.hidden = false;
+      }
+      if (reference) reference.textContent = `Checkout reference: ${data.session_id || sessionId}`;
+      card.dataset.checkoutStatus = payment === 'paid' || payment === 'no_payment_required' ? 'paid' : status;
+    } catch (error) {
+      if (heading) heading.textContent = 'Unable to verify payment';
+      if (message) message.textContent = error.message || 'Stripe could not verify this checkout. Try checking again.';
+      if (reference) reference.textContent = `Checkout reference: ${sessionId}`;
+    } finally {
+      if (retry) { retry.disabled = false; retry.textContent = 'Check status again'; }
+    }
+  }
+
+  function initCheckoutStatus() {
+    $('#refreshCheckoutStatus')?.addEventListener('click', refreshCheckoutStatus);
+    refreshCheckoutStatus();
+  }
+
   function handleGlobalClicks() {
     document.addEventListener('click', (event) => {
       const removeSelectedImage = event.target.closest('[data-remove-selected-image]');
       if (removeSelectedImage) {
         state.inspiration.images = state.inspiration.images.filter((image) => image.id !== removeSelectedImage.dataset.removeSelectedImage);
-        saveSelectedInspiration();
         renderInspirationUI();
         const status = $('#inspirationMessage');
         if (status) status.textContent = state.inspiration.images.length
@@ -984,7 +1032,10 @@
       if (save) { toggleSave(save.dataset.id); return; }
 
       const buy = event.target.closest('.buy-action');
-      if (buy) { startCheckout(buy.dataset.id, buy); return; }
+      if (buy) {
+        startCheckout(buy.dataset.id, buy);
+        return;
+      }
 
       const feedback = event.target.closest('.feedback-action');
       if (feedback) {
@@ -1008,10 +1059,7 @@
       if (recent) {
         const item = state.recent.find((entry) => entry.id === recent.dataset.recentId);
         if (item?.request) {
-          const request = { ...item.request };
-          delete request.inspiration_images;
-          delete request.inspiration_image_ids;
-          sessionStorage.setItem('artCoResumeRequest', JSON.stringify(request));
+          sessionStorage.setItem('artCoResumeRequest', JSON.stringify(item.request));
           window.location.href = `/concierge?intent=${encodeURIComponent(item.intent)}&resume=1`;
         } else if (item?.data) {
           saveLastResult(item.data);
@@ -1048,8 +1096,7 @@
 
   async function initConcierge() {
     const params = new URLSearchParams(window.location.search);
-    state.inspiration.images = [];
-    state.inspiration.selectedIds = [];
+    clearCurrentInspirationImages();
     setIntent(state.intent);
     const serviceSelect = $('#serviceSelect');
     if (serviceSelect) serviceSelect.value = state.intent;
@@ -1067,7 +1114,7 @@
           const input = $('#requestInput');
           if (input) input.value = request.goal;
         }
-        if (request?.goal) {
+    if (request?.goal) {
           const history = $('#conversationHistory');
           if (history) {
             history.innerHTML = `<div class="conversation-entry"><p class="label">Previous request</p><p>${escapeHtml(request.goal)}</p></div><div class="conversation-entry"><p class="label">Continue from here</p><p>Refine the request, add a preference, or ask me to take it in a new direction.</p></div>`;
@@ -1192,6 +1239,7 @@
       case 'results': initResults(); break;
       case 'saved': initSaved(); break;
       case 'taste': initTaste(); break;
+      case 'checkout': initCheckoutStatus(); break;
       default: break;
     }
   }

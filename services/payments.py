@@ -28,6 +28,10 @@ class PaymentUnavailable(RuntimeError):
     pass
 
 
+class CheckoutSessionNotFound(RuntimeError):
+    pass
+
+
 def _require_secret() -> str:
     if not STRIPE_SECRET_KEY:
         raise PaymentUnavailable("Stripe Checkout is not configured.")
@@ -91,6 +95,31 @@ async def create_checkout_session(artwork_id: str, success_url: str | None = Non
         )
         response.raise_for_status()
         return response.json()
+
+
+async def retrieve_checkout_session(session_id: str) -> dict[str, Any]:
+    """Retrieve payment status directly from Stripe; never infer payment from a redirect."""
+    session_id = str(session_id or "").strip()
+    if not session_id.startswith("cs_") or len(session_id) > 255:
+        raise CheckoutSessionNotFound("A valid Stripe Checkout Session ID is required.")
+    secret = _require_secret()
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.get(f"{STRIPE_API}/checkout/sessions/{session_id}", auth=(secret, ""))
+        if response.status_code == 404:
+            raise CheckoutSessionNotFound("That checkout session could not be found.")
+        response.raise_for_status()
+        session = response.json()
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    return {
+        "session_id": session.get("id"),
+        "status": session.get("status"),
+        "payment_status": session.get("payment_status"),
+        "artwork_id": metadata.get("artwork_id") or session.get("client_reference_id"),
+        "amount_total": session.get("amount_total"),
+        "currency": session.get("currency"),
+        "created": session.get("created"),
+        "expires_at": session.get("expires_at"),
+    }
 
 
 def verify_webhook_signature(payload: bytes, signature_header: str) -> bool:
