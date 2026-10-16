@@ -1293,3 +1293,26 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .learning-guide-grid, .learning-examples-list { grid-template-columns: minmax(0, 1fr); }
   .checkout-order-row { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* Browser-local purchase tracking. Payment state is verified against Stripe on demand. */
+.dashboard-purchases { margin-top: 42px; padding-top: 30px; border-top: 1px solid var(--border, #dedbd5); }
+.purchase-history-list { display: grid; gap: 0; border-top: 1px solid var(--border, #dedbd5); }
+.purchase-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .42fr); gap: 24px; align-items: center; padding: 18px 0; border-bottom: 1px solid var(--border, #dedbd5); }
+.purchase-record-main, .purchase-record-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.purchase-record-main strong { line-height: 1.4; overflow-wrap: anywhere; }
+.purchase-record-main span, .purchase-record-main small { color: var(--muted, #5d5a56); line-height: 1.45; }
+.purchase-record-main small { font-size: .78rem; overflow-wrap: anywhere; }
+.purchase-record-summary { align-items: flex-start; }
+.purchase-record-summary > strong { font-size: .94rem; }
+.purchase-status { display: inline-flex; align-items: center; padding: 0; font-size: .78rem; line-height: 1.4; font-weight: 650; color: var(--muted); }
+.purchase-status--paid { color: var(--success); }
+.purchase-status--processing, .purchase-status--awaiting { color: var(--muted); }
+.purchase-status--expired, .purchase-status--unknown { color: var(--muted); }
+.purchase-check-button { padding: 8px 12px; min-height: 34px; }
+@media (max-width: 600px) {
+  .purchase-record { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .purchase-record-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .purchase-record-summary > strong { justify-self: end; }
+  .purchase-check-button { grid-column: 1 / -1; width: 100%; }
+}
+

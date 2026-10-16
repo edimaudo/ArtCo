@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261015-p0p1" in response.text
+    assert "/static/js/app.js?v=20261016-purchase-tracking" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -177,3 +177,68 @@ def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
     assert calls["auth"] == ("sk_test_fake", "")
     assert session["payment_status"] == "paid"
     assert session["artwork_id"] == "work-456"
+
+
+def test_purchase_history_is_integrated_with_checkout_and_dashboard():
+    js = (ROOT / "static/js/app.js").read_text()
+    dashboard = (ROOT / "templates/dashboard.html").read_text()
+    assert "purchases: state.purchases" in js
+    assert "state.purchases = Array.isArray(existing.purchases)" in js
+    assert "async function recordCheckoutStarted(session, artwork)" in js
+    assert "await recordCheckoutStarted(data, artwork)" in js
+    assert "async function recordVerifiedPurchase(data)" in js
+    assert "await recordVerifiedPurchase(data)" in js
+    assert "async function checkTrackedPurchase(sessionId, button)" in js
+    assert "data-purchase-session=" in js
+    assert 'id="dashboardPurchases"' in dashboard
+    assert 'id="dashboardPurchasesEmpty"' in dashboard
+    assert 'id="purchasesTab"' in dashboard
+    assert 'id="purchasesPanel"' in dashboard
+    assert "dashboardTabs[(index + 1) % dashboardTabs.length]" in js
+    assert "Shipping and delivery updates come from the seller, not ArtCo." in dashboard
+
+
+def test_all_six_concierge_intents_have_distinct_ranking_or_selection_rules():
+    geometric = artwork("geometric", "Geometric Study", "Aligned Artist", medium="geometric abstract sculpture", description="geometric forms")
+    quiet = artwork("quiet", "Quiet Landscape", "Other Artist", medium="oil landscape", description="quiet landscape")
+
+    # Discover uses its exploration setting to favour new directions; Find ranks against the actual brief.
+    discovery_request = ConciergeRequest(intent="discover", goal="Find new work", art_interests=["geometric abstract"], discovery_level=90)
+    adventurous = agent._deterministic_score(geometric, discovery_request, [], "experimental contemporary art")
+    familiar = agent._deterministic_score(geometric, discovery_request, [], "geometric abstract art")
+    assert adventurous > familiar
+
+    find_request = ConciergeRequest(intent="find", goal="Find geometric abstract sculpture", art_interests=["geometric abstract"], mediums=["sculpture"])
+    assert agent._deterministic_score(geometric, find_request, [], "contemporary art") > agent._deterministic_score(quiet, find_request, [], "contemporary art")
+
+    # Taste discovery receives a positive relevance signal for a Qloo-related artist.
+    taste_request = ConciergeRequest(intent="taste", goal="Explore my taste")
+    aligned_qloo = agent._deterministic_score(geometric, taste_request, [{"name": "Aligned Artist"}], "contemporary art")
+    unaligned_qloo = agent._deterministic_score(geometric, taste_request, [{"name": "Different Artist"}], "contemporary art")
+    assert aligned_qloo > unaligned_qloo
+
+    # Curate favours artist variety instead of returning several works by one artist.
+    curated = [
+        artwork("a1", "One", "Same Artist"),
+        artwork("a2", "Two", "Same Artist"),
+        artwork("b1", "Three", "Different Artist"),
+    ]
+    curated_result = agent._select(curated, ConciergeRequest(intent="curate", goal="Curate a set", number_of_works=2), [], None)
+    assert len(curated_result) == 2
+    assert len({item.artist for item in curated_result}) == 2
+
+    # Buy remains a hard availability/source filter.
+    buy_works = [
+        artwork("institution-work", "Institutional", "Museum Artist"),
+        artwork("available-work", "For Sale", "Gallery Artist", source_kind="commercial", availability="available"),
+        artwork("unavailable-work", "Unavailable", "Other Gallery", source_kind="commercial", availability="not_for_sale"),
+    ]
+    bought = agent._select(buy_works, ConciergeRequest(intent="buy", goal="Buy art", purchase_required=True, number_of_works=2), [], None)
+    assert [item.id for item in bought] == ["available-work"]
+
+    # Learn prioritizes institutional context and descriptive records.
+    learn_request = ConciergeRequest(intent="learn", goal="Learn about a movement")
+    institutional = artwork("museum", "Study", "Artist", source_kind="institution", description="Historical context")
+    commercial = artwork("gallery", "Study", "Artist", source_kind="commercial", availability="available", description="Historical context")
+    assert agent._deterministic_score(institutional, learn_request, [], "art history") > agent._deterministic_score(commercial, learn_request, [], "art history")
+

@@ -1,10 +1,11 @@
 (() => {
-  const STATE_VERSION = 6;
+  const STATE_VERSION = 7;
 
   const state = {
     profile: { loves: [], avoids: [], notes: '', discoveryLevel: 50, updatedAt: null },
     saved: [],
     recent: [],
+    purchases: [],
     last: null,
     preferences: { theme: 'light', fontScale: 'md' },
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
@@ -71,13 +72,14 @@
       profile: state.profile,
       saved: state.saved,
       recent: state.recent,
+      purchases: state.purchases,
       last: state.last,
       preferences: state.preferences,
     };
   }
 
   function persistAppState() {
-    putInspirationSetting('appState', appStateSnapshot()).catch((error) => {
+    return putInspirationSetting('appState', appStateSnapshot()).catch((error) => {
       console.warn('ArtCo could not persist app state in IndexedDB.', error);
     });
   }
@@ -96,6 +98,7 @@
         };
         state.saved = Array.isArray(existing.saved) ? existing.saved.slice(0, 40) : [];
         state.recent = Array.isArray(existing.recent) ? existing.recent.slice(0, 8) : [];
+        state.purchases = Array.isArray(existing.purchases) ? existing.purchases.slice(0, 12) : [];
         state.last = existing.last || null;
         state.preferences = {
           theme: existing.preferences?.theme === 'dark' ? 'dark' : 'light',
@@ -364,11 +367,62 @@
     }
   }
 
+  function purchaseStatusInfo(purchase) {
+    const paymentStatus = String(purchase.paymentStatus || '').toLowerCase();
+    const checkoutStatus = String(purchase.checkoutStatus || '').toLowerCase();
+    if (paymentStatus === 'paid' || paymentStatus === 'no_payment_required') return { key: 'paid', label: 'Payment confirmed' };
+    if (checkoutStatus === 'expired') return { key: 'expired', label: 'Checkout expired' };
+    if (checkoutStatus === 'complete') return { key: 'processing', label: 'Payment processing' };
+    if (checkoutStatus === 'open') return { key: 'awaiting', label: 'Payment not confirmed' };
+    return { key: 'unknown', label: 'Status not verified' };
+  }
+
+  function formatPurchaseAmount(amountTotal, currency) {
+    if (amountTotal === null || amountTotal === undefined || !Number.isFinite(Number(amountTotal))) return 'Not available';
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency', currency: String(currency || 'CAD').toUpperCase(),
+      }).format(Number(amountTotal) / 100);
+    } catch {
+      return `${(Number(amountTotal) / 100).toFixed(2)} ${String(currency || 'CAD').toUpperCase()}`;
+    }
+  }
+
+  function renderPurchaseHistory() {
+    const list = $('#dashboardPurchases');
+    const empty = $('#dashboardPurchasesEmpty');
+    if (!list) return;
+    const purchases = Array.isArray(state.purchases) ? state.purchases.slice(0, 10) : [];
+    if (empty) empty.hidden = purchases.length > 0;
+    if (!purchases.length) {
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = purchases.map((purchase) => {
+      const status = purchaseStatusInfo(purchase);
+      const createdAt = purchase.createdAt ? new Date(purchase.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Date not available';
+      const reference = String(purchase.sessionId || '');
+      const shortReference = reference.length > 19 ? `${reference.slice(0, 9)}…${reference.slice(-7)}` : reference;
+      return `<article class="purchase-record">
+        <div class="purchase-record-main">
+          <strong>${escapeHtml(purchase.title || purchase.artworkId || 'Artwork checkout')}</strong>
+          <span>${escapeHtml(purchase.artist || 'Artist not provided')}</span>
+          <small>${escapeHtml(createdAt)} · Ref ${escapeHtml(shortReference)}</small>
+        </div>
+        <div class="purchase-record-summary">
+          <span class="purchase-status purchase-status--${status.key}">${escapeHtml(status.label)}</span>
+          <strong>${escapeHtml(formatPurchaseAmount(purchase.amountTotal, purchase.currency))}</strong>
+          <button class="secondary-button purchase-check-button" type="button" data-purchase-session="${escapeAttribute(reference)}">Check payment</button>
+        </div>
+      </article>`;
+    }).join('');
+  }
+
   function renderDashboard() {
     const recent = $('#dashboardRecent');
     const saved = $('#dashboardSaved');
     const savedEmpty = $('#dashboardSavedEmpty');
-    if (!recent && !saved) return;
+    if (!recent && !saved && !$('#dashboardPurchases')) return;
 
     if (recent) {
       recent.innerHTML = state.recent.length
@@ -390,34 +444,46 @@
       if (savedEmpty) savedEmpty.hidden = works.length > 0;
     }
 
+    renderPurchaseHistory();
     renderTastePage();
 
-    const overviewTab = $('#overviewTab');
-    const tasteTab = $('#tasteTab');
-    const overviewPanel = $('#overviewPanel');
-    const tastePanel = $('#tastePanel');
+    const dashboardTabs = [
+      { name: 'overview', tab: $('#overviewTab'), panel: $('#overviewPanel') },
+      { name: 'purchases', tab: $('#purchasesTab'), panel: $('#purchasesPanel') },
+      { name: 'taste', tab: $('#tasteTab'), panel: $('#tastePanel') },
+    ].filter((item) => item.tab && item.panel);
     const activateTab = (tabName, moveFocus = false) => {
-      const isTaste = tabName === 'taste';
-      overviewTab?.classList.toggle('is-active', !isTaste);
-      tasteTab?.classList.toggle('is-active', isTaste);
-      overviewTab?.setAttribute('aria-selected', String(!isTaste));
-      tasteTab?.setAttribute('aria-selected', String(isTaste));
-      overviewTab?.setAttribute('tabindex', isTaste ? '-1' : '0');
-      tasteTab?.setAttribute('tabindex', isTaste ? '0' : '-1');
-      if (overviewPanel) { overviewPanel.hidden = isTaste; overviewPanel.classList.toggle('is-active', !isTaste); }
-      if (tastePanel) { tastePanel.hidden = !isTaste; tastePanel.classList.toggle('is-active', isTaste); }
-      if (moveFocus) (isTaste ? tasteTab : overviewTab)?.focus();
+      const selected = dashboardTabs.find((item) => item.name === tabName) || dashboardTabs[0];
+      dashboardTabs.forEach((item) => {
+        const active = item === selected;
+        item.tab.classList.toggle('is-active', active);
+        item.tab.setAttribute('aria-selected', String(active));
+        item.tab.setAttribute('tabindex', active ? '0' : '-1');
+        item.panel.hidden = !active;
+        item.panel.classList.toggle('is-active', active);
+      });
+      if (moveFocus) selected?.tab.focus();
     };
-    overviewTab?.addEventListener('click', () => activateTab('overview'));
-    tasteTab?.addEventListener('click', () => activateTab('taste'));
-    [overviewTab, tasteTab].forEach((tab) => tab?.addEventListener('keydown', (event) => {
-      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); activateTab(tab === overviewTab ? 'taste' : 'overview', true); }
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); activateTab(tab === overviewTab ? 'taste' : 'overview', true); }
-      if (event.key === 'Home') { event.preventDefault(); activateTab('overview', true); }
-      if (event.key === 'End') { event.preventDefault(); activateTab('taste', true); }
-    }));
+    dashboardTabs.forEach((item, index) => {
+      item.tab.addEventListener('click', () => activateTab(item.name));
+      item.tab.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          activateTab(dashboardTabs[(index + 1) % dashboardTabs.length].name, true);
+        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          activateTab(dashboardTabs[(index - 1 + dashboardTabs.length) % dashboardTabs.length].name, true);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          activateTab(dashboardTabs[0].name, true);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          activateTab(dashboardTabs[dashboardTabs.length - 1].name, true);
+        }
+      });
+    });
     const hash = window.location.hash.toLowerCase();
-    activateTab(hash === '#taste' ? 'taste' : 'overview');
+    activateTab(hash === '#taste' ? 'taste' : hash === '#purchases' ? 'purchases' : 'overview');
   }
 
   function renderHome() {
@@ -925,8 +991,75 @@
     if (updated) updated.textContent = state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved';
   }
 
+  async function recordCheckoutStarted(session, artwork) {
+    const now = new Date().toISOString();
+    const sessionId = String(session.session_id || '').trim();
+    if (!sessionId) throw new Error('The checkout session was created without a reference. Please try again.');
+    const record = {
+      sessionId,
+      artworkId: String(artwork?.id || session.artwork_id || ''),
+      title: String(artwork?.title || 'Artwork checkout'),
+      artist: String(artwork?.artist || 'Artist not provided'),
+      imageUrl: String(artwork?.display_image_url || artwork?.image_url || ''),
+      checkoutStatus: 'open',
+      paymentStatus: 'unpaid',
+      amountTotal: null,
+      currency: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.purchases = [record, ...state.purchases.filter((item) => item.sessionId !== sessionId)].slice(0, 12);
+    await persistAppState();
+    return record;
+  }
+
+  async function recordVerifiedPurchase(data) {
+    const sessionId = String(data.session_id || '').trim();
+    if (!sessionId) return null;
+    const existing = state.purchases.find((item) => item.sessionId === sessionId) || {};
+    const paymentStatus = String(data.payment_status || existing.paymentStatus || 'unpaid').toLowerCase();
+    const checkoutStatus = String(data.status || existing.checkoutStatus || 'open').toLowerCase();
+    const artworkId = String(data.artwork_id || existing.artworkId || '');
+    const record = {
+      ...existing,
+      sessionId,
+      artworkId,
+      title: existing.title || artworkId || 'Artwork checkout',
+      artist: existing.artist || 'Artist not provided',
+      checkoutStatus,
+      paymentStatus,
+      amountTotal: data.amount_total ?? existing.amountTotal ?? null,
+      currency: data.currency || existing.currency || null,
+      createdAt: existing.createdAt || (data.created ? new Date(Number(data.created) * 1000).toISOString() : new Date().toISOString()),
+      updatedAt: new Date().toISOString(),
+    };
+    state.purchases = [record, ...state.purchases.filter((item) => item.sessionId !== sessionId)].slice(0, 12);
+    await persistAppState();
+    return record;
+  }
+
+  async function checkTrackedPurchase(sessionId, button) {
+    const message = $('#dashboardPurchasesMessage');
+    const session = String(sessionId || '').trim();
+    if (!session) return;
+    if (button) { button.disabled = true; button.textContent = 'Checking…'; }
+    if (message) message.textContent = 'Checking payment status with Stripe…';
+    try {
+      const response = await fetch(`/api/checkout/status?session_id=${encodeURIComponent(session)}`, { headers: { Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.detail || 'Payment status could not be checked.');
+      await recordVerifiedPurchase(data);
+      renderPurchaseHistory();
+      if (message) message.textContent = 'Payment status updated from Stripe.';
+    } catch (error) {
+      if (message) message.textContent = error.message || 'Payment status could not be checked. Try again.';
+      if (button) { button.disabled = false; button.textContent = 'Check payment'; }
+    }
+  }
+
   async function startCheckout(id, button) {
     const message = $('#purchaseMessage');
+    const artwork = getArtworkById(String(id));
     if (button) {
       button.disabled = true;
       button.textContent = 'Opening checkout…';
@@ -939,9 +1072,10 @@
         body: JSON.stringify({ artwork_id: id }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success || !data.checkout_url) {
+      if (!response.ok || !data.success || !data.checkout_url || !data.session_id) {
         throw new Error(data.detail || 'Checkout is not available for this work.');
       }
+      await recordCheckoutStarted(data, artwork);
       window.location.assign(data.checkout_url);
     } catch (error) {
       if (message) message.textContent = error.message || 'Checkout could not be started.';
@@ -973,6 +1107,7 @@
       if (!response.ok || !data.success) throw new Error(data.detail || 'Stripe could not verify this checkout.');
       const payment = String(data.payment_status || 'unpaid').toLowerCase();
       const status = String(data.status || 'open').toLowerCase();
+      await recordVerifiedPurchase(data);
       if (payment === 'paid' || payment === 'no_payment_required') {
         if (heading) heading.textContent = 'Payment confirmed';
         if (message) message.textContent = 'Stripe confirms this checkout is paid. Keep the checkout reference for any questions about the purchase.';
@@ -1017,6 +1152,9 @@
 
   function handleGlobalClicks() {
     document.addEventListener('click', (event) => {
+      const purchaseCheck = event.target.closest('[data-purchase-session]');
+      if (purchaseCheck) { checkTrackedPurchase(purchaseCheck.dataset.purchaseSession, purchaseCheck); return; }
+
       const removeSelectedImage = event.target.closest('[data-remove-selected-image]');
       if (removeSelectedImage) {
         state.inspiration.images = state.inspiration.images.filter((image) => image.id !== removeSelectedImage.dataset.removeSelectedImage);
