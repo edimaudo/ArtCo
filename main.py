@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from models.schemas import ConciergeRequest
 from services.concierge import run
+from services.llm import InspirationImageAnalysisError
 from services.payments import PaymentUnavailable, PaymentConfigurationError, CheckoutSessionNotFound, create_checkout_session, retrieve_checkout_session, parse_webhook, verify_webhook_signature
 from services.image_proxy import is_allowed_detail_url, is_allowed_image_url
 from services.config import REQUEST_TIMEOUT
@@ -445,8 +446,9 @@ async def diagnostics_live() -> dict[str, Any]:
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
     try:
+        request_timeout = 12.2 if payload.inspiration_images else CONCIERGE_RESPONSE_TIMEOUT_SECONDS
         result: dict[str, Any] = await asyncio.wait_for(
-            run(payload), timeout=CONCIERGE_RESPONSE_TIMEOUT_SECONDS
+            run(payload), timeout=request_timeout
         )
         # Enforce the visible-card limit at the API boundary as well as in the
         # agent and UI. This prevents a stale/alternate agent response from
@@ -457,14 +459,25 @@ async def concierge(payload: ConciergeRequest) -> JSONResponse:
         result["results"] = primary
         result["not_for_sale"] = secondary
         return JSONResponse(result)
+    except InspirationImageAnalysisError as exc:
+        logger.warning("Required image-based search could not complete: %s", str(exc))
+        return JSONResponse(
+            {"success": False, "detail": str(exc), "error_type": "InspirationImageAnalysisError"},
+            status_code=503,
+        )
     except asyncio.TimeoutError:
-        logger.warning("Concierge request exceeded the %.1f second API deadline", CONCIERGE_RESPONSE_TIMEOUT_SECONDS)
+        logger.warning("Concierge request exceeded its response deadline")
+        deadline_detail = (
+            "This image-backed search could not complete within the response deadline. ArtCo did not substitute a text-only result; retry with fewer or smaller images."
+            if payload.inspiration_images
+            else "This search exceeded ArtCo’s response-time limit. Try a more focused request."
+        )
         return JSONResponse(
             {
                 "success": False,
-                "detail": "This search exceeded ArtCo’s response-time limit. Try a more focused request.",
+                "detail": deadline_detail,
                 "error_type": "ResponseDeadlineExceeded",
-                "diagnostics": {"response_target_ms": int(CONCIERGE_RESPONSE_TIMEOUT_SECONDS * 1000)},
+                "diagnostics": {"response_target_ms": int(request_timeout * 1000)},
             },
             status_code=504,
         )

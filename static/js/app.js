@@ -933,10 +933,10 @@
     const count = Number(inspiration.image_count || 0);
     if (!count) { panel.hidden = true; panel.innerHTML = ''; return; }
     panel.hidden = false;
-    const heading = inspiration.analyzed ? 'How your images guided the search' : 'Your images were received';
+    const heading = inspiration.analyzed ? 'How your images guided the search' : 'Image search not completed';
     const detail = inspiration.analyzed
-      ? (inspiration.summary || 'ArtCo used the visual characteristics in your images to guide the artwork search.')
-      : (inspiration.message || 'Visual analysis was unavailable, so this search used your written request and saved taste.');
+      ? (inspiration.message || 'ArtCo searched the written request first, then used the visual characteristics in your images for a second artwork search.')
+      : (inspiration.message || 'An attached image is a required search input. The image-based search did not complete, so ArtCo will not present this as a completed text-only search.');
     const tags = [...new Set([...(inspiration.visual_attributes || []), ...(inspiration.colour_palette || [])])].slice(0, 8);
     panel.innerHTML = `<div class="visual-inspiration-result-copy"><strong>${escapeHtml(heading)}</strong><p>${escapeHtml(detail)}</p></div>${tags.length ? `<div class="visual-inspiration-result-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}`;
   }

@@ -14,6 +14,10 @@ T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
 
+class InspirationImageAnalysisError(RuntimeError):
+    """Raised when an uploaded image cannot be interpreted for the required second search stage."""
+
+
 class RequestSignals(BaseModel):
     """Signals extracted from a natural-language concierge request."""
 
@@ -103,10 +107,20 @@ async def _generate_structured(model: type[T], prompt: str) -> T | None:
         return None
 
 
-async def analyze_inspiration_images(request_text: str, images: list[Any]) -> VisualAnalysis | None:
-    """Use Gemini vision to extract visual clues without identifying people or guessing provenance."""
-    if not images or not GEMINI_API_KEY:
-        return None
+async def analyze_inspiration_images(request_text: str, images: list[Any]) -> VisualAnalysis:
+    """Interpret uploaded references for the mandatory image-based search stage.
+
+    A supplied image is a user constraint, not best-effort enrichment. This function
+    therefore raises a clear error instead of returning ``None`` when visual analysis
+    is not configured or does not produce usable structured output.
+    """
+    if not images:
+        raise InspirationImageAnalysisError("No inspiration images were supplied for visual analysis.")
+    if not GEMINI_API_KEY:
+        raise InspirationImageAnalysisError(
+            "Image-based search is required because you added an image, but visual analysis is not configured. "
+            "Configure GEMINI_API_KEY and try again."
+        )
 
     try:
         from google import genai
@@ -146,11 +160,19 @@ Return JSON with summary, visual_attributes (up to 10 short phrases), colour_pal
         )
         payload = _extract_json_object(getattr(response, "text", "") or "")
         if payload is None:
-            return None
-        return VisualAnalysis.model_validate(payload)
+            raise ValueError("The visual analysis service returned no structured description.")
+        analysis = VisualAnalysis.model_validate(payload)
+        if not any([analysis.summary.strip(), analysis.visual_attributes, analysis.colour_palette, analysis.search_terms]):
+            raise ValueError("The visual analysis service returned no searchable visual characteristics.")
+        return analysis
+    except InspirationImageAnalysisError:
+        raise
     except Exception as exc:
-        logger.warning("Inspiration image analysis failed (%s); continuing with text-only search", type(exc).__name__)
-        return None
+        logger.warning("Required inspiration image analysis failed (%s)", type(exc).__name__)
+        raise InspirationImageAnalysisError(
+            "ArtCo could not interpret the uploaded image, so the image-based search could not be completed. "
+            "Try a clearer image or check the visual analysis service configuration and retry."
+        ) from exc
 
 
 async def extract_request_signals(

@@ -9,7 +9,7 @@ from typing import Any
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .image_proxy import display_image_url, is_allowed_detail_url
-from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
+from .llm import CandidateReview, InspirationImageAnalysisError, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -301,6 +301,8 @@ async def _research(
     status: list[dict[str, str]],
     *,
     include_extended_sources: bool = False,
+    stage_label: str = "Researching artwork sources",
+    stage_key: str = "artwork",
 ) -> tuple[list[Artwork], list[dict[str, Any]]]:
     """Search a bounded set of providers in parallel.
 
@@ -309,7 +311,7 @@ async def _research(
     per provider in each pass and only expands the source set when image-bearing
     results are insufficient.
     """
-    progress = {"label": "Researching artwork sources", "state": "active"}
+    progress = {"label": stage_label, "state": "active"}
     status.append(progress)
     commercial = commercial_providers()
     institutional = institutional_providers()
@@ -348,6 +350,7 @@ async def _research(
         configured = _provider_configured(provider)
         source_stats[provider.name] = {
             "provider": provider.name,
+            "search_stage": stage_key,
             "configured": configured,
             "queries_attempted": 0,
             "results_found": 0,
@@ -704,14 +707,13 @@ def _build_learning_guide(goal: str | None, works: list[Artwork]) -> dict[str, A
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     """Run a time-bounded concierge search and return an image-ready shortlist.
 
-    Catalogue search, request interpretation, optional image analysis, and Qloo
-    enrichment run concurrently. The response uses deterministic ranking rather
-    than waiting for a second model-review pass, keeping the response budget under
-    five seconds when at least one public catalogue responds promptly.
+    Written-request catalogue search always runs first. If inspiration images are
+    attached, a required visual-analysis step then drives a second catalogue search;
+    the app never returns a successful text-only result for an image-backed request.
+    Requests without images retain the short, single-pass response budget.
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
-    response_budget_seconds = 4.25
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
     fallback_signals = RequestSignals(
@@ -728,24 +730,21 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     )
     directions = _fast_search_directions(request)
 
-    # Kick off independent enrichment immediately. A short, bounded opportunity
-    # lets very fast vision/model responses inform the first queries without ever
-    # putting a full model round-trip in front of catalogue search.
+    has_inspiration_images = bool(request.inspiration_images)
+    response_budget_seconds = 11.8 if has_inspiration_images else 4.25
+
+    # Request understanding and cultural enrichment can work in the background.
+    # Artwork search itself has a strict order: written brief first, then visual
+    # analysis and a second image-driven catalogue search when images were supplied.
     signals_task = asyncio.create_task(extract_request_signals(
         request.goal or "",
         request.loves,
         request.additional_interests + request.art_interests,
         request.avoid_references,
     ))
-    visual_task = (
-        asyncio.create_task(analyze_inspiration_images(request.goal or "", request.inspiration_images))
-        if request.inspiration_images else None
-    )
+    visual_task = None  # Deliberately not launched until the written-request search completes.
+
     async def qloo_after_signal_extraction() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        # Qloo should resolve only references extracted from the current brief and
-        # explicit positive taste. Give extraction a short opportunity to finish;
-        # if the model is slow, use explicit profile fields rather than querying
-        # the entire sentence and accidentally resolving an unrelated entity.
         try:
             qloo_signals = await asyncio.wait_for(asyncio.shield(signals_task), timeout=0.9)
             if not isinstance(qloo_signals, RequestSignals):
@@ -778,57 +777,6 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             return []
 
     qloo_direction_task = asyncio.create_task(qloo_art_direction_bridge())
-    early_enrichment = [signals_task] + ([visual_task] if visual_task else [])
-    if early_enrichment:
-        # Vision needs a realistic share of the deadline: 350 ms caused uploaded
-        # images to be omitted from the initial catalogue queries almost every time.
-        await asyncio.wait(early_enrichment, timeout=1.1 if visual_task else 0.55)
-    early_signals = signals_task.result() if signals_task.done() and not signals_task.cancelled() and signals_task.exception() is None else fallback_signals
-    if not isinstance(early_signals, RequestSignals):
-        try:
-            early_signals = RequestSignals.model_validate(early_signals.model_dump() if hasattr(early_signals, "model_dump") else early_signals)
-        except Exception:
-            early_signals = fallback_signals
-    if visual_task and visual_task.done() and not visual_task.cancelled() and visual_task.exception() is None:
-        early_visual = visual_task.result()
-    else:
-        early_visual = None
-    fallback_directions = _fast_search_directions(request)
-    search_goal = _searchable_goal(request)
-    directions = list(dict.fromkeys([
-        search_goal,
-        *((early_visual.search_terms[:3] if early_visual else [])),
-        *((early_visual.visual_attributes[:1] if early_visual else [])),
-        *early_signals.art_interests[:2],
-        *request.art_interests[:2],
-        *request.mediums[:1],
-        *[item for item in fallback_directions if item != search_goal],
-    ]))[:4]
-    directions = [direction for direction in directions if direction]
-    research_task = asyncio.create_task(_research(directions, request, status))
-    tasks = [research_task, signals_task, qloo_task, qloo_direction_task] + ([visual_task] if visual_task else [])
-
-    # Only the catalogue search is on the critical path. Enrichment shares its
-    # runtime, but never delays the response after the art sources have answered.
-    wait_budget = min(3.45, max(0.05, response_budget_seconds - (loop.time() - started) - 0.45))
-    try:
-        await asyncio.wait_for(asyncio.shield(research_task), timeout=wait_budget)
-    except Exception as exc:
-        logger.warning("Primary artwork search did not finish within the response budget (%s)", type(exc).__name__)
-        if not research_task.done():
-            research_task.cancel()
-
-    # Give concurrent enrichment a small grace period after the catalogue result
-    # is ready, but preserve the overall response deadline.
-    optional_pending = [task for task in tasks if task is not research_task and not task.done()]
-    grace = min(0.55, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
-    if optional_pending and grace > 0:
-        await asyncio.wait(optional_pending, timeout=grace)
-    pending = [task for task in tasks if not task.done()]
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
 
     def completed_result(task: asyncio.Task, default: Any) -> Any:
         if not task.done() or task.cancelled():
@@ -839,19 +787,151 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             logger.warning("Optional concierge task failed (%s)", type(exc).__name__)
             return default
 
-    research_result = completed_result(research_task, ([], []))
-    works, source_diagnostics = research_result
+    background_tasks = [signals_task, qloo_task, qloo_direction_task]
+    early_visual = None
+    if has_inspiration_images:
+        # Stage 1: complete the text/catalogue search without any image-derived terms.
+        text_directions = _fast_search_directions(request)
+        text_works, text_diagnostics = await _research(
+            text_directions, request, status,
+            stage_label="Searching your written request", stage_key="text",
+        )
+
+        # Stage 2: images are a required search input. Do not return a successful
+        # text-only result if interpretation fails or exceeds its allotted time.
+        try:
+            visual_analysis = await asyncio.wait_for(
+                analyze_inspiration_images(request.goal or "", request.inspiration_images),
+                timeout=4.5,
+            )
+        except asyncio.TimeoutError as exc:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            raise InspirationImageAnalysisError(
+                "The written-request search completed, but ArtCo could not finish interpreting your uploaded image in time. "
+                "The image search is required, so this request was not returned as a text-only result. Retry with a smaller image."
+            ) from exc
+        except InspirationImageAnalysisError:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            raise
+        if visual_analysis is None:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            raise InspirationImageAnalysisError(
+                "The written-request search completed, but the image analysis returned no result. "
+                "The image search is required. Check the visual analysis configuration and retry."
+            )
+
+        status.append({"label": "Interpreting your inspiration images", "state": "done"})
+        visual_terms = list(dict.fromkeys(
+            str(term).strip()
+            for term in [
+                *visual_analysis.search_terms,
+                *visual_analysis.visual_attributes,
+                *visual_analysis.colour_palette,
+                visual_analysis.summary,
+            ]
+            if isinstance(term, str) and term.strip()
+        ))[:8]
+        palette_query = " ".join(visual_analysis.colour_palette[:4]).strip()
+        image_directions = list(dict.fromkeys([
+            *visual_analysis.search_terms,
+            *visual_analysis.visual_attributes,
+            *( [f"{palette_query} art"] if palette_query else [] ),
+            visual_analysis.summary,
+        ]))
+        image_directions = [term.strip() for term in image_directions if isinstance(term, str) and term.strip()][:4]
+        if not image_directions:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            raise InspirationImageAnalysisError(
+                "ArtCo could not identify searchable visual characteristics in the uploaded image. "
+                "The image search is required; try a clearer image and retry."
+            )
+
+        # The image-derived traits affect both the second provider query and the
+        # ranking of merged results; existing written preferences are retained.
+        request = request.model_copy(update={
+            "art_interests": list(dict.fromkeys([*request.art_interests, *visual_terms]))[:8],
+        })
+        image_works, image_diagnostics = await _research(
+            image_directions, request, status,
+            include_extended_sources=True,
+            stage_label="Searching your inspiration images", stage_key="image",
+        )
+        merged: dict[str, Artwork] = {work.id: work for work in text_works}
+        # Prefer the image-pass representation of duplicates so its matched query
+        # remains available to the relevance scorer. Unique text matches are retained.
+        for work in image_works:
+            merged[work.id] = work
+        works = list(merged.values())
+        source_diagnostics = [*text_diagnostics, *image_diagnostics]
+        directions = list(dict.fromkeys([*text_directions, *image_directions]))[:8]
+    else:
+        # No image was attached: preserve the fast, single-pass text workflow.
+        await asyncio.wait([signals_task], timeout=0.55)
+        early_signals = completed_result(signals_task, fallback_signals)
+        if not isinstance(early_signals, RequestSignals):
+            try:
+                early_signals = RequestSignals.model_validate(early_signals.model_dump() if hasattr(early_signals, "model_dump") else early_signals)
+            except Exception:
+                early_signals = fallback_signals
+        fallback_directions = _fast_search_directions(request)
+        search_goal = _searchable_goal(request)
+        directions = list(dict.fromkeys([
+            search_goal,
+            *early_signals.art_interests[:2],
+            *request.art_interests[:2],
+            *request.mediums[:1],
+            *[item for item in fallback_directions if item != search_goal],
+        ]))[:4]
+        directions = [direction for direction in directions if direction]
+        research_task = asyncio.create_task(_research(
+            directions, request, status, stage_label="Searching your written request", stage_key="text",
+        ))
+        wait_budget = min(3.45, max(0.05, response_budget_seconds - (loop.time() - started) - 0.45))
+        try:
+            await asyncio.wait_for(asyncio.shield(research_task), timeout=wait_budget)
+        except Exception as exc:
+            logger.warning("Primary artwork search did not finish within the response budget (%s)", type(exc).__name__)
+            if not research_task.done():
+                research_task.cancel()
+        grace = min(0.55, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
+        optional_pending = [task for task in background_tasks if not task.done()]
+        if optional_pending and grace > 0:
+            await asyncio.wait(optional_pending, timeout=grace)
+        research_result = completed_result(research_task, ([], []))
+        works, source_diagnostics = research_result
+        visual_analysis = None
+
+    # Let cultural enrichment finish only when there is remaining budget; it never
+    # substitutes for the required text/image search stages.
+    optional_pending = [task for task in background_tasks if not task.done()]
+    remaining_budget = max(0.0, response_budget_seconds - (loop.time() - started) - 0.15)
+    enrichment_grace = min(0.25 if has_inspiration_images else 0.0, remaining_budget)
+    if optional_pending and enrichment_grace > 0:
+        await asyncio.wait(optional_pending, timeout=enrichment_grace)
+    pending = [task for task in background_tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
     signals = completed_result(signals_task, fallback_signals)
     if not isinstance(signals, RequestSignals):
         try:
             signals = RequestSignals.model_validate(signals.model_dump() if hasattr(signals, "model_dump") else signals)
         except Exception:
             signals = fallback_signals
-    if visual_task:
-        visual_analysis = completed_result(visual_task, None) or early_visual
-    else:
-        visual_analysis = None
-
     qloo_result = completed_result(qloo_task, ([], []))
     resolved, qloo_artists = qloo_result if isinstance(qloo_result, tuple) and len(qloo_result) == 2 else ([], [])
     cultural_art_directions = completed_result(qloo_direction_task, [])
@@ -860,12 +940,10 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     if visual_analysis:
         visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes]
         signals.art_interests = list(dict.fromkeys([*visual_terms, *signals.art_interests]))[:8]
-        status.append({"label": "Interpreting your inspiration images", "state": "done"})
+        status.append({"label": "Image-based artwork search completed", "state": "done"})
     elif request.inspiration_images:
-        status.append({
-            "label": "Visual analysis unavailable", "state": "warning",
-            "detail": "Images were received, but the visual analysis did not finish within the response time budget. The search used the written brief and saved taste.",
-        })
+        # Defensive invariant: images may never silently fall back to text-only mode.
+        raise InspirationImageAnalysisError("The required image-based search did not complete. Retry the search.")
 
     request = _apply_signal_overrides(request, signals)
     for entry in status:
@@ -918,7 +996,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "intent": request.intent.value,
         "diagnostics": {
             "duration_ms": round((loop.time() - started) * 1000),
-            "response_target_ms": 4500,
+            "response_target_ms": int(response_budget_seconds * 1000),
             "qloo_configured": bool(config.QLOO_API_KEY),
             "qloo_base_url": config.QLOO_BASE_URL,
             "gemini_configured": bool(config.GEMINI_API_KEY),
@@ -936,6 +1014,10 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "entity_matches_found": len(resolved),
             "related_artists_found": len(qloo_artists),
             "cultural_art_directions_used": len(cultural_art_directions),
+            "text_search_completed": True,
+            "image_search_required": has_inspiration_images,
+            "image_search_completed": visual_analysis is not None and has_inspiration_images,
+            "image_search_result_count": sum(int(stat.get("results_found", 0)) for stat in source_diagnostics if stat.get("search_stage") == "image"),
         },
         "summary": intent_summary,
         "learning_guide": _build_learning_guide(request.goal, primary) if request.intent.value == "learn" else None,
@@ -946,10 +1028,11 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "visual_attributes": visual_analysis.visual_attributes if visual_analysis else [],
             "colour_palette": visual_analysis.colour_palette if visual_analysis else [],
             "search_terms": visual_analysis.search_terms if visual_analysis else [],
+            "search_completed": visual_analysis is not None and has_inspiration_images,
             "message": (
-                "These visible characteristics informed the search."
-                if visual_analysis
-                else ("The images were not interpreted this time; the search used your written request and saved taste." if request.inspiration_images else "")
+                "The written request was searched first. These visible characteristics then informed a second artwork search."
+                if visual_analysis and has_inspiration_images
+                else ""
             ),
         },
         "brief": {
