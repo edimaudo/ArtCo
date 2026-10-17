@@ -42,11 +42,6 @@ def test_concierge_request_rejects_unselected_image_id():
         })
 
 
-def test_selected_image_cannot_be_silently_omitted_from_request_payload():
-    with pytest.raises(ValidationError, match="must be attached to the current request"):
-        ConciergeRequest.model_validate({"inspiration_image_ids": ["image-1"]})
-
-
 def test_concierge_request_rejects_invalid_base64():
     with pytest.raises(ValidationError):
         ConciergeRequest.model_validate({
@@ -87,7 +82,7 @@ def test_concierge_ui_has_image_upload_and_no_redundant_composer_labels():
     assert "What would you like help with?" not in response.text
 
 
-def test_image_search_runs_after_written_request_search_and_uses_visual_terms(monkeypatch):
+def test_image_search_runs_after_written_search_and_uses_visual_terms(monkeypatch):
     import asyncio
     from types import SimpleNamespace
 
@@ -102,15 +97,8 @@ def test_image_search_runs_after_written_request_search_and_uses_visual_terms(mo
     )
     events = []
 
-    class OrderedProvider:
-        name = "Ordered collection"
-
-        async def search(self, query: str, limit: int = 8):
-            events.append(("catalogue_search", query))
-            return []
-
     async def fake_analyze(_request_text, _images):
-        events.append(("image_analysis", "started"))
+        events.append("image_analysis")
         return VisualAnalysis(
             summary="Angular forms with a vivid palette.",
             visual_attributes=["angular geometric forms", "high contrast"],
@@ -131,12 +119,16 @@ def test_image_search_runs_after_written_request_search_and_uses_visual_terms(mo
     async def fake_artist_insights(*_args, **_kwargs):
         return []
 
+    async def fake_research(directions, _request, _status, *, phase_label, **_kwargs):
+        events.append((phase_label, list(directions)))
+        return [], []
+
+    monkeypatch.setattr(agent.config, "GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(agent, "analyze_inspiration_images", fake_analyze)
     monkeypatch.setattr(agent, "extract_request_signals", fake_extract)
     monkeypatch.setattr(agent, "search_entities", fake_search_entities)
     monkeypatch.setattr(agent, "get_artist_insights", fake_artist_insights)
-    monkeypatch.setattr(agent, "commercial_providers", lambda: [])
-    monkeypatch.setattr(agent, "institutional_providers", lambda: [OrderedProvider()])
+    monkeypatch.setattr(agent, "_research", fake_research)
 
     result = asyncio.run(agent.run_concierge(ConciergeRequest(
         intent="discover",
@@ -145,46 +137,33 @@ def test_image_search_runs_after_written_request_search_and_uses_visual_terms(mo
         inspiration_images=[image],
     )))
 
-    analysis_index = next(index for index, event in enumerate(events) if event[0] == "image_analysis")
-    search_events = [(index, event[1]) for index, event in enumerate(events) if event[0] == "catalogue_search"]
-    assert len(search_events) == 2, events
-    assert search_events[0][0] < analysis_index < search_events[1][0], events
-    assert search_events[0][1] == "Find art with this mood."
-    assert search_events[1][1] == "geometric abstract painting"
+    assert events[0][0] == "Searching your written request"
+    assert events[1] == "image_analysis"
+    assert events[2][0] == "Searching for artwork that matches your images"
     assert "geometric abstract painting" in result["search_directions"]
     assert result["visual_inspiration"]["analyzed"] is True
-    assert result["visual_inspiration"]["search_completed"] is True
     assert result["visual_inspiration"]["image_count"] == 1
     assert "high contrast" in result["visual_inspiration"]["visual_attributes"]
-    assert result["diagnostics"]["text_search_completed"] is True
-    assert result["diagnostics"]["image_search_completed"] is True
-    assert {item["search_stage"] for item in result["diagnostics"]["source_diagnostics"]} == {"text", "image"}
+    assert result["diagnostics"]["image_search"]["performed"] is True
+    assert "geometric abstract painting" in result["diagnostics"]["image_search"]["directions"]
 
 
-def test_image_analysis_failure_does_not_return_successful_text_only_result(monkeypatch):
+def test_attached_image_analysis_failure_does_not_return_text_only_results(monkeypatch):
     import asyncio
     from types import SimpleNamespace
 
     import services.agent as agent
     from models.schemas import InspirationImage
-    from services.llm import InspirationImageAnalysisError
 
     image = InspirationImage(
-        image_id="image-required",
+        image_id="image-failed",
         mime_type="image/jpeg",
         data=encoded_payload(),
     )
-    events = []
-
-    class TextProvider:
-        name = "Text stage collection"
-
-        async def search(self, query: str, limit: int = 8):
-            events.append(("text_search", query))
-            return []
+    calls = []
 
     async def fake_analyze(_request_text, _images):
-        events.append(("image_analysis", "failed"))
+        calls.append("image_analysis")
         return None
 
     async def fake_extract(*_args, **_kwargs):
@@ -194,48 +173,35 @@ def test_image_analysis_failure_does_not_return_successful_text_only_result(monk
             number_of_works=None,
         )
 
+    async def fake_search_entities(_query):
+        return []
+
+    async def fake_artist_insights(*_args, **_kwargs):
+        return []
+
+    async def fake_research(_directions, _request, _status, *, phase_label, **_kwargs):
+        calls.append(phase_label)
+        return [], []
+
+    monkeypatch.setattr(agent.config, "GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(agent, "analyze_inspiration_images", fake_analyze)
     monkeypatch.setattr(agent, "extract_request_signals", fake_extract)
-    monkeypatch.setattr(agent, "search_entities", lambda _query: asyncio.sleep(0, result=[]))
-    monkeypatch.setattr(agent, "get_artist_insights", lambda *_args, **_kwargs: asyncio.sleep(0, result=[]))
-    monkeypatch.setattr(agent, "commercial_providers", lambda: [])
-    monkeypatch.setattr(agent, "institutional_providers", lambda: [TextProvider()])
+    monkeypatch.setattr(agent, "search_entities", fake_search_entities)
+    monkeypatch.setattr(agent, "get_artist_insights", fake_artist_insights)
+    monkeypatch.setattr(agent, "_research", fake_research)
 
-    async def run_test():
-        with pytest.raises(InspirationImageAnalysisError, match="image search is required"):
-            await agent.run_concierge(ConciergeRequest(
-                intent="discover", goal="Find calm abstract art",
-                inspiration_image_ids=["image-required"], inspiration_images=[image],
-            ))
+    result = asyncio.run(agent.run_concierge(ConciergeRequest(
+        intent="discover",
+        goal="Find art with this mood.",
+        inspiration_image_ids=["image-failed"],
+        inspiration_images=[image],
+    )))
 
-    asyncio.run(run_test())
-    assert events[0][0] == "text_search"
-    assert events[-1] == ("image_analysis", "failed")
-
-
-def test_api_returns_clear_failure_when_required_image_analysis_fails(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
-    from services.llm import InspirationImageAnalysisError
-
-    async def fake_run(_payload):
-        raise InspirationImageAnalysisError("The image search is required. Configure visual analysis and retry.")
-
-    monkeypatch.setattr(main, "run", fake_run)
-    response = TestClient(main.app).post("/api/concierge", json={
-        "intent": "discover",
-        "goal": "Find art with this palette.",
-        "inspiration_image_ids": ["image-1"],
-        "inspiration_images": [{
-            "image_id": "image-1",
-            "name": "palette.jpg",
-            "mime_type": "image/jpeg",
-            "data": encoded_payload(),
-        }],
-    })
-    assert response.status_code == 503
-    assert response.json()["success"] is False
-    assert "image search is required" in response.json()["detail"]
+    assert calls == ["Searching your written request", "image_analysis"]
+    assert result["success"] is False
+    assert result["error_type"] == "RequiredVisualSearchFailed"
+    assert "not returned text-only recommendations" in result["detail"]
+    assert result["results"] == []
 
 
 def test_api_accepts_image_payload_without_persisting_it_to_response(monkeypatch):

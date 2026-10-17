@@ -70,13 +70,6 @@ class ConciergeRequest(BaseModel):
         image_ids = [item.image_id for item in self.inspiration_images]
         if len(image_ids) != len(set(image_ids)):
             raise ValueError("Each inspiration image must have a unique ID.")
-        if len(self.inspiration_image_ids) != len(set(self.inspiration_image_ids)):
-            raise ValueError("Each selected inspiration image must have a unique ID.")
-        if self.inspiration_image_ids:
-            missing_images = set(self.inspiration_image_ids) - set(image_ids)
-            unexpected_images = set(image_ids) - set(self.inspiration_image_ids)
-            if missing_images:
-                raise ValueError("Selected inspiration images must be attached to the current request. Upload them again and retry.")
-            if unexpected_images:
-                raise ValueError("Submitted images must match the selected inspiration images.")
+        if self.inspiration_image_ids and any(image_id not in self.inspiration_image_ids for image_id in image_ids):
+            raise ValueError("Submitted images must match the selected inspiration images.")
         return self

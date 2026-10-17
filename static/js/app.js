@@ -1,8 +1,9 @@
 (() => {
-  const STATE_VERSION = 7;
+  const STATE_VERSION = 8;
 
   const state = {
     profile: { loves: [], avoids: [], notes: '', discoveryLevel: 50, updatedAt: null },
+    tasteDraft: null,
     saved: [],
     recent: [],
     purchases: [],
@@ -212,6 +213,65 @@
     persistAppState();
   }
 
+  function cloneProfile(profile) {
+    return {
+      loves: [...(profile?.loves || [])],
+      avoids: [...(profile?.avoids || [])],
+      notes: String(profile?.notes || ''),
+      discoveryLevel: Number(profile?.discoveryLevel ?? 50),
+      updatedAt: profile?.updatedAt || null,
+    };
+  }
+
+  function tasteComparable(profile) {
+    return JSON.stringify({
+      loves: [...(profile?.loves || [])],
+      avoids: [...(profile?.avoids || [])],
+      notes: String(profile?.notes || ''),
+      discoveryLevel: Number(profile?.discoveryLevel ?? 50),
+    });
+  }
+
+  function tasteDraftIsDirty() {
+    return Boolean(state.tasteDraft && tasteComparable(state.tasteDraft) !== tasteComparable(state.profile));
+  }
+
+  function markTasteDraftChanged() {
+    const updated = $('#tasteUpdated');
+    if (updated) updated.textContent = tasteDraftIsDirty() ? 'Unsaved changes' : (state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved');
+  }
+
+  async function saveTasteDraft() {
+    if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+    state.profile = { ...cloneProfile(state.tasteDraft), updatedAt: new Date().toISOString() };
+    state.tasteDraft = cloneProfile(state.profile);
+    await persistAppState();
+    renderTastePage();
+  }
+
+  function discardTasteDraft() {
+    state.tasteDraft = cloneProfile(state.profile);
+    renderTastePage();
+  }
+
+  function addDraftReference(value) {
+    const clean = String(value || '').trim().replace(/,$/, '');
+    if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+    if (!clean || state.tasteDraft.loves.some((item) => item.toLowerCase() === clean.toLowerCase()) || state.tasteDraft.loves.length >= 12) return;
+    state.tasteDraft.loves.push(clean);
+    state.tasteDraft.avoids = state.tasteDraft.avoids.filter((item) => item.toLowerCase() !== clean.toLowerCase());
+    markTasteDraftChanged();
+  }
+
+  function addDraftAvoid(value) {
+    const clean = String(value || '').trim().replace(/,$/, '');
+    if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+    if (!clean || state.tasteDraft.avoids.some((item) => item.toLowerCase() === clean.toLowerCase()) || state.tasteDraft.avoids.length >= 12) return;
+    state.tasteDraft.avoids.push(clean);
+    state.tasteDraft.loves = state.tasteDraft.loves.filter((item) => item.toLowerCase() !== clean.toLowerCase());
+    markTasteDraftChanged();
+  }
+
   function saveLastResult(data) {
     state.last = data;
     persistAppState();
@@ -390,10 +450,8 @@
 
   function renderPurchaseHistory() {
     const list = $('#dashboardPurchases');
-    const empty = $('#dashboardPurchasesEmpty');
     if (!list) return;
     const purchases = Array.isArray(state.purchases) ? state.purchases.slice(0, 10) : [];
-    if (empty) empty.hidden = purchases.length > 0;
     if (!purchases.length) {
       list.innerHTML = '';
       return;
@@ -434,10 +492,8 @@
       const works = state.saved.slice(0, 3);
       saved.innerHTML = works.map((work) => {
         const id = escapeAttribute(work.id);
-        const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url);
-        const image = savedImageUrl
-          ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`
-          : '<div class="saved-thumb no-image">Preview unavailable</div>';
+        const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url) || artworkFallbackUrl(work.title, work.artist);
+        const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== work.image_url && work.image_url ? `data-original-src="${escapeAttribute(work.image_url)}"` : ''} ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} ${savedImageUrl === artworkFallbackUrl(work.title, work.artist) ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`;
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
       bindArtworkImageFallbacks(saved);
@@ -449,10 +505,10 @@
 
     const dashboardTabs = [
       { name: 'overview', tab: $('#overviewTab'), panel: $('#overviewPanel') },
-      { name: 'purchases', tab: $('#purchasesTab'), panel: $('#purchasesPanel') },
       { name: 'taste', tab: $('#tasteTab'), panel: $('#tastePanel') },
+      { name: 'purchases', tab: $('#purchasesTab'), panel: $('#purchasesPanel') },
     ].filter((item) => item.tab && item.panel);
-    const activateTab = (tabName, moveFocus = false) => {
+    const activateTab = (tabName, moveFocus = false, updateHash = false) => {
       const selected = dashboardTabs.find((item) => item.name === tabName) || dashboardTabs[0];
       dashboardTabs.forEach((item) => {
         const active = item === selected;
@@ -462,23 +518,27 @@
         item.panel.hidden = !active;
         item.panel.classList.toggle('is-active', active);
       });
+      if (updateHash) {
+        const suffix = selected?.name === 'overview' ? '/dashboard' : `/dashboard#${selected?.name}`;
+        window.history.replaceState(null, '', suffix);
+      }
       if (moveFocus) selected?.tab.focus();
     };
     dashboardTabs.forEach((item, index) => {
-      item.tab.addEventListener('click', () => activateTab(item.name));
+      item.tab.addEventListener('click', () => requestTasteNavigation(() => activateTab(item.name, false, true)));
       item.tab.addEventListener('keydown', (event) => {
         if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
           event.preventDefault();
-          activateTab(dashboardTabs[(index + 1) % dashboardTabs.length].name, true);
+          requestTasteNavigation(() => activateTab(dashboardTabs[(index + 1) % dashboardTabs.length].name, true, true));
         } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
           event.preventDefault();
-          activateTab(dashboardTabs[(index - 1 + dashboardTabs.length) % dashboardTabs.length].name, true);
+          requestTasteNavigation(() => activateTab(dashboardTabs[(index - 1 + dashboardTabs.length) % dashboardTabs.length].name, true, true));
         } else if (event.key === 'Home') {
           event.preventDefault();
-          activateTab(dashboardTabs[0].name, true);
+          requestTasteNavigation(() => activateTab(dashboardTabs[0].name, true, true));
         } else if (event.key === 'End') {
           event.preventDefault();
-          activateTab(dashboardTabs[dashboardTabs.length - 1].name, true);
+          requestTasteNavigation(() => activateTab(dashboardTabs[dashboardTabs.length - 1].name, true, true));
         }
       });
     });
@@ -715,6 +775,7 @@
         throw new Error(detail?.detail?.[0]?.msg || detail?.detail || `Request failed (${response.status})`);
       }
       const data = await response.json();
+      if (data.success === false) throw new Error(data.detail || 'The image-informed search could not be completed.');
       const historyRequest = { ...payload };
       delete historyRequest.inspiration_images;
       delete historyRequest.inspiration_image_ids;
@@ -758,9 +819,16 @@
     $('#tasteTags').innerHTML = tags.map((tag) => `<span class="taste-tag">${escapeHtml(tag)}</span>`).join('');
   }
 
+  function artworkFallbackUrl(title, artist) {
+    const params = new URLSearchParams({ title: String(title || ''), artist: String(artist || '') });
+    return `/api/artwork-image-fallback?${params.toString()}`;
+  }
+
   function bindArtworkImageFallbacks(root) {
     if (!root) return;
     root.querySelectorAll('img[data-artwork-image]').forEach((image) => {
+      if (image.dataset.fallbackBound === 'true') return;
+      image.dataset.fallbackBound = 'true';
       const advanceFallback = () => {
         // The source page may publish a working image even when its raw API
         // thumbnail blocks hotlinking. Try the same-origin page-preview proxy
@@ -777,12 +845,17 @@
           image.src = originalSrc;
           return;
         }
-        const placeholder = document.createElement('div');
-        placeholder.className = 'art-placeholder';
-        placeholder.textContent = 'Preview unavailable';
-        placeholder.setAttribute('role', 'img');
-        placeholder.setAttribute('aria-label', 'Artwork preview unavailable; open the source page to view the work');
-        image.replaceWith(placeholder);
+        if (image.dataset.triedImageFallback !== 'true') {
+          image.dataset.triedImageFallback = 'true';
+          image.src = artworkFallbackUrl(image.dataset.artworkTitle, image.dataset.artworkArtist);
+          return;
+        }
+        // Do not leave a visible recommendation without an image. Remove a card
+        // only after both source-page recovery and exact-work museum fallback fail.
+        const card = image.closest('.art-card');
+        const savedThumb = image.closest('.saved-thumb');
+        if (card) card.remove();
+        else if (savedThumb) savedThumb.remove();
       };
       image.addEventListener('error', advanceFallback);
       // A cached request can fail before handlers are attached after the card
@@ -801,11 +874,10 @@
     const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
     const directImageUrl = work.image_url || '';
     const pagePreviewUrl = artworkPreviewUrl(work.detail_url);
-    const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl;
+    const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl || artworkFallbackUrl(work.title, work.artist);
     const previewIsInitial = Boolean(pagePreviewUrl && imageDisplayUrl === pagePreviewUrl);
-    const image = imageDisplayUrl
-      ? `<img data-artwork-image data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`
-      : '<div class="art-placeholder">Preview unavailable</div>';
+    const fallbackIsInitial = imageDisplayUrl === artworkFallbackUrl(work.title, work.artist);
+    const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} ${fallbackIsInitial ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`;
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
     const externalLink = work.detail_url
@@ -878,10 +950,17 @@
       taste: 'Artists and works to explore.',
       curate: 'Works that make sense together.',
       buy: 'Art you can act on now.',
-      learn: 'Art worth understanding.',
+      learn: 'Your learning guide.',
     };
     $('#resultsHeading').textContent = labels[intent] || labels.discover;
     $('#resultsSummary').textContent = data.summary || '';
+    const learningOnly = intent === 'learn';
+    const recommendationSection = $('#recommendationsSection');
+    const refinePanel = $('#refinePanel');
+    if (recommendationSection) recommendationSection.hidden = learningOnly;
+    if (refinePanel) refinePanel.hidden = learningOnly;
+    const resultsMeta = $('#resultsMeta');
+    if (resultsMeta) resultsMeta.hidden = learningOnly;
     const available = data.purchase_available || 0;
     const results = (data.results || []).slice(0, 3);
     const notForSale = intent === 'buy'
@@ -902,9 +981,7 @@
         ? (commercialConfigured
           ? 'I could not find purchase inventory in the connected commercial sources.'
           : 'No commercial art source is connected yet. Connect an acquisition source to search art available to buy.')
-        : intent === 'learn'
-          ? 'The learning guide is available above, but the connected collections did not return an illustrated example for this topic. Try a movement, artist, period, subject, or medium.'
-          : 'The connected art collections did not return a match for that wording. Try a broader art style, artist, subject, or medium.';
+        : 'The connected art collections did not return a match with a retrievable image. Try a broader art style, artist, subject, or medium.';
       const failedSources = (diagnostic.source_diagnostics || [])
         .filter((source) => source.configured && (source.errors || []).length)
         .map((source) => `${source.provider} (${source.errors[0]})`);
@@ -923,20 +1000,24 @@
         : 'Additional works from museum and institutional collections. These are not available for purchase.';
     }
     renderLearningGuide(data.learning_guide, intent);
-    renderVisualInspirationSummary(data.visual_inspiration || {});
+    renderVisualInspirationSummary(data.visual_inspiration || {}, intent);
     renderTasteSummary(data);
+    if (learningOnly) {
+      const tasteSummary = $('#tasteSummary');
+      if (tasteSummary) tasteSummary.hidden = true;
+    }
   }
 
-  function renderVisualInspirationSummary(inspiration) {
+  function renderVisualInspirationSummary(inspiration, intent = state.intent) {
     const panel = $('#visualInspirationSummary');
     if (!panel) return;
     const count = Number(inspiration.image_count || 0);
     if (!count) { panel.hidden = true; panel.innerHTML = ''; return; }
     panel.hidden = false;
-    const heading = inspiration.analyzed ? 'How your images guided the search' : 'Image search not completed';
+    const heading = intent === 'learn' ? 'How your image informed the guide' : inspiration.analyzed ? 'How your images guided the search' : 'Your images were received';
     const detail = inspiration.analyzed
-      ? (inspiration.message || 'ArtCo searched the written request first, then used the visual characteristics in your images for a second artwork search.')
-      : (inspiration.message || 'An attached image is a required search input. The image-based search did not complete, so ArtCo will not present this as a completed text-only search.');
+      ? (inspiration.summary || (intent === 'learn' ? 'ArtCo used the visual characteristics in your image as part of this learning guide.' : 'ArtCo used the visual characteristics in your images to guide the artwork search.'))
+      : (inspiration.message || 'Visual analysis was unavailable, so this search used your written request and saved taste.');
     const tags = [...new Set([...(inspiration.visual_attributes || []), ...(inspiration.colour_palette || [])])].slice(0, 8);
     panel.innerHTML = `<div class="visual-inspiration-result-copy"><strong>${escapeHtml(heading)}</strong><p>${escapeHtml(detail)}</p></div>${tags.length ? `<div class="visual-inspiration-result-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}`;
   }
@@ -974,21 +1055,23 @@
   }
 
   function renderTastePage() {
+    if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+    const profile = state.tasteDraft;
     const chips = $('#tasteChips');
     const avoids = $('#avoidChips');
     const notes = $('#tasteNotes');
     const slider = $('#discoveryLevel');
     const updated = $('#tasteUpdated');
     if (!chips || !notes) return;
-    chips.innerHTML = state.profile.loves.map((value, index) => `
+    chips.innerHTML = profile.loves.map((value, index) => `
       <span class="chip">${escapeHtml(value)} <button type="button" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)} from things you love">×</button></span>
     `).join('');
-    if (avoids) avoids.innerHTML = state.profile.avoids.map((value, index) => `
+    if (avoids) avoids.innerHTML = profile.avoids.map((value, index) => `
       <span class="chip">${escapeHtml(value)} <button type="button" data-remove-list="avoids" data-remove-index="${index}" aria-label="Remove ${escapeAttribute(value)} from things you avoid">×</button></span>
     `).join('');
-    notes.value = state.profile.notes;
-    if (slider) slider.value = String(state.profile.discoveryLevel);
-    if (updated) updated.textContent = state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved';
+    notes.value = profile.notes;
+    if (slider) slider.value = String(profile.discoveryLevel);
+    if (updated) updated.textContent = tasteDraftIsDirty() ? 'Unsaved changes' : (state.profile.updatedAt ? `Updated ${new Date(state.profile.updatedAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Not yet saved');
   }
 
   async function recordCheckoutStarted(session, artwork) {
@@ -1218,10 +1301,19 @@
 
       const remove = event.target.closest('[data-remove-index]');
       if (remove) {
-        const list = remove.dataset.removeList === 'avoids' ? state.profile.avoids : state.profile.loves;
-        list.splice(Number(remove.dataset.removeIndex), 1);
-        saveProfile();
-        renderTastePage();
+        const tastePanel = $('#tastePanel');
+        if (tastePanel && !tastePanel.hidden) {
+          if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+          const list = remove.dataset.removeList === 'avoids' ? state.tasteDraft.avoids : state.tasteDraft.loves;
+          list.splice(Number(remove.dataset.removeIndex), 1);
+          renderTastePage();
+          markTasteDraftChanged();
+        } else {
+          const list = remove.dataset.removeList === 'avoids' ? state.profile.avoids : state.profile.loves;
+          list.splice(Number(remove.dataset.removeIndex), 1);
+          saveProfile();
+          renderTastePage();
+        }
       }
     });
   }
@@ -1230,6 +1322,7 @@
   function initDashboard() {
     renderDashboard();
     initTasteEditor();
+    installTasteNavigationGuard();
   }
 
   async function initConcierge() {
@@ -1306,50 +1399,56 @@
   function initSaved() { renderSavedPage(); }
 
   function initTasteEditor() {
+    state.tasteDraft = cloneProfile(state.profile);
     renderTastePage();
     $('#tasteInput')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ',') {
         event.preventDefault();
-        addProfileReference(event.target.value);
+        addDraftReference(event.target.value);
         event.target.value = '';
         renderTastePage();
+        markTasteDraftChanged();
       }
     });
     $('#tasteInput')?.addEventListener('blur', (event) => {
       if (event.target.value.trim()) {
-        addProfileReference(event.target.value);
+        addDraftReference(event.target.value);
         event.target.value = '';
         renderTastePage();
+        markTasteDraftChanged();
       }
     });
     $('#avoidInput')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ',') {
         event.preventDefault();
-        addProfileAvoid(event.target.value);
+        addDraftAvoid(event.target.value);
         event.target.value = '';
         renderTastePage();
+        markTasteDraftChanged();
       }
     });
     $('#avoidInput')?.addEventListener('blur', (event) => {
       if (event.target.value.trim()) {
-        addProfileAvoid(event.target.value);
+        addDraftAvoid(event.target.value);
         event.target.value = '';
         renderTastePage();
+        markTasteDraftChanged();
       }
     });
     $('#tasteNotes')?.addEventListener('input', (event) => {
-      state.profile.notes = event.target.value;
-      saveProfile();
+      if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+      state.tasteDraft.notes = event.target.value;
+      markTasteDraftChanged();
     });
     $('#discoveryLevel')?.addEventListener('input', (event) => {
-      state.profile.discoveryLevel = Number(event.target.value);
-      saveProfile();
+      if (!state.tasteDraft) state.tasteDraft = cloneProfile(state.profile);
+      state.tasteDraft.discoveryLevel = Number(event.target.value);
       const label = $('#discoveryValue');
-      if (label) label.textContent = `${state.profile.discoveryLevel}%`;
+      if (label) label.textContent = `${state.tasteDraft.discoveryLevel}%`;
+      markTasteDraftChanged();
     });
-    $('#saveTaste')?.addEventListener('click', () => {
-      saveProfile();
-      renderTastePage();
+    $('#saveTaste')?.addEventListener('click', async () => {
+      await saveTasteDraft();
       const button = $('#saveTaste');
       if (button) {
         button.textContent = 'Saved';
@@ -1357,6 +1456,71 @@
       }
     });
   }
+
+  let pendingTasteNavigation = null;
+  function isTastePanelActive() {
+    const panel = $('#tastePanel');
+    return Boolean(panel && !panel.hidden);
+  }
+
+  function hideTasteUnsavedModal() {
+    const modal = $('#tasteUnsavedModal');
+    if (modal) modal.hidden = true;
+  }
+
+  function showTasteUnsavedModal(action) {
+    pendingTasteNavigation = action;
+    const modal = $('#tasteUnsavedModal');
+    if (!modal) return;
+    modal.hidden = false;
+    modal.querySelector('[role="dialog"]')?.focus();
+    $('#saveTasteAndContinue')?.focus();
+  }
+
+  function requestTasteNavigation(action) {
+    if (isTastePanelActive() && tasteDraftIsDirty()) {
+      showTasteUnsavedModal(action);
+      return;
+    }
+    action();
+  }
+
+  function installTasteNavigationGuard() {
+    document.addEventListener('click', (event) => {
+      const anchor = event.target.closest('a[href]');
+      if (!anchor || anchor.target === '_blank' || !isTastePanelActive() || !tasteDraftIsDirty()) return;
+      const href = anchor.getAttribute('href') || '';
+      if (!href || href.startsWith('#') || href.toLowerCase().startsWith('javascript:')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestTasteNavigation(() => window.location.assign(anchor.href));
+    }, true);
+    window.addEventListener('beforeunload', (event) => {
+      if (!isTastePanelActive() || !tasteDraftIsDirty()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
+    $('#saveTasteAndContinue')?.addEventListener('click', async () => {
+      const action = pendingTasteNavigation;
+      await saveTasteDraft();
+      pendingTasteNavigation = null;
+      hideTasteUnsavedModal();
+      action?.();
+    });
+    $('#discardTasteAndContinue')?.addEventListener('click', () => {
+      const action = pendingTasteNavigation;
+      pendingTasteNavigation = null;
+      discardTasteDraft();
+      hideTasteUnsavedModal();
+      action?.();
+    });
+    $('#stayOnTaste')?.addEventListener('click', () => {
+      pendingTasteNavigation = null;
+      hideTasteUnsavedModal();
+      $('#tasteTab')?.focus();
+    });
+  }
+
 
   function initTaste() {
     window.location.href = '/dashboard#taste';

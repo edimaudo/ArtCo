@@ -218,8 +218,8 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
 def test_static_assets_are_versioned_to_avoid_stale_result_caps():
     from pathlib import Path
     html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
-    assert "/static/js/app.js?v=20261016-purchase-tracking" in html
-    assert "/static/css/style.css?v=20261016-purchase-tracking" in html
+    assert "/static/js/app.js?v=20261017-image-recovery-taste-guard" in html
+    assert "/static/css/style.css?v=20261017-image-recovery-taste-guard" in html
 
 
 def test_artlogic_cloudfront_cdn_is_proxyable():
@@ -320,3 +320,122 @@ def test_cultural_art_directions_only_boost_matching_work_metadata():
         work, request, [], "contemporary art", ["experimental composition", "expressive forms"]
     )
     assert culturally_relevant > baseline
+
+
+def test_image_attached_concierge_uses_the_longer_required_image_search_deadline(monkeypatch):
+    import asyncio
+    import main as app_main
+    from fastapi.testclient import TestClient
+
+    observed = {}
+
+    async def slow_run(payload):
+        observed["image_count"] = len(payload.inspiration_images)
+        await asyncio.sleep(0.12)
+        return {"success": True, "intent": payload.intent.value, "results": []}
+
+    monkeypatch.setattr(app_main, "run", slow_run)
+    monkeypatch.setattr(app_main, "CONCIERGE_IMAGE_RESPONSE_TIMEOUT_SECONDS", 0.5)
+    response = TestClient(app_main.app).post(
+        "/api/concierge", json={
+            "intent": "discover",
+            "goal": "modern painting",
+            "inspiration_image_ids": ["image-1"],
+            "inspiration_images": [{
+                "image_id": "image-1", "mime_type": "image/jpeg", "data": "YXJ0" + "eA" * 20, 
+            }],
+        }
+    )
+    assert response.status_code == 200
+    assert observed["image_count"] == 1
+
+
+def test_required_image_search_failure_is_returned_as_service_error(monkeypatch):
+    import main as app_main
+    from fastapi.testclient import TestClient
+
+    async def failed_run(payload):
+        return {
+            "success": False,
+            "error_type": "RequiredVisualSearchFailed",
+            "detail": "Image interpretation is required.",
+            "results": [],
+        }
+
+    monkeypatch.setattr(app_main, "run", failed_run)
+    response = TestClient(app_main.app).post(
+        "/api/concierge", json={
+            "intent": "discover",
+            "goal": "modern painting",
+            "inspiration_image_ids": ["image-1"],
+            "inspiration_images": [{"image_id": "image-1", "mime_type": "image/jpeg", "data": "YXJ0" + "eA" * 20}],
+        }
+    )
+    assert response.status_code == 503
+    assert response.json()["error_type"] == "RequiredVisualSearchFailed"
+
+
+def test_artwork_preview_skips_failed_metadata_image_and_tries_next_candidate(monkeypatch):
+    import httpx
+    import main as app_main
+
+    page_url = "https://www.artic.edu/artworks/456"
+    broken_url = "https://www.artic.edu/iiif/2/broken/full/843,/0/default.jpg"
+    good_url = "https://www.artic.edu/iiif/2/good/full/843,/0/default.jpg"
+    page_response = httpx.Response(
+        200,
+        headers={"content-type": "text/html; charset=utf-8"},
+        content=(f'<html><head><meta property="og:image" content="{broken_url}"></head>'
+                 f'<body><img class="artwork-image" alt="Artwork" src="{good_url}"></body></html>').encode(),
+        request=httpx.Request("GET", page_url),
+    )
+    broken_response = httpx.Response(403, request=httpx.Request("GET", broken_url))
+    good_response = httpx.Response(
+        200, headers={"content-type": "image/jpeg"}, content=b"recovered-artwork-image",
+        request=httpx.Request("GET", good_url),
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.responses = {page_url: page_response, broken_url: broken_response, good_url: good_response}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): return self.responses[url]
+
+    monkeypatch.setattr(app_main.httpx, "AsyncClient", FakeClient)
+    response = TestClient(app_main.app).get("/api/artwork-preview", params={"url": page_url})
+    assert response.status_code == 200
+    assert response.content == b"recovered-artwork-image"
+
+
+def test_artwork_image_fallback_searches_for_the_same_work(monkeypatch):
+    import services.art_sources as sources
+    from services.art_sources import Artwork
+
+    work = Artwork(
+        id="fallback-work", title="Blue Study", artist="Morgan Lee",
+        image_url="https://www.artic.edu/iiif/2/fallback/full/843,/0/default.jpg",
+        detail_url="https://www.artic.edu/artworks/456", source="Art Institute of Chicago",
+        source_kind="institution", availability="not_for_sale", price=None, currency=None,
+        medium="oil on canvas", dimensions=None, year="2020", description=None,
+    )
+
+    class FakeProvider:
+        def __init__(self, *args, **kwargs): pass
+        async def search(self, query, limit=4): return [work]
+
+    monkeypatch.setattr(sources, "ArtInstituteProvider", FakeProvider)
+    monkeypatch.setattr(sources, "MetProvider", FakeProvider)
+    monkeypatch.setattr(sources, "ClevelandProvider", FakeProvider)
+    response = TestClient(app).get("/api/artwork-image-fallback", params={"title": "Blue Study", "artist": "Morgan Lee"}, follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("/api/artwork-image?url=")
+
+
+def test_recommendation_markup_has_no_preview_unavailable_fallback_copy():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent
+    js = (root / "static/js/app.js").read_text()
+    assert "Preview unavailable" not in js
+    assert "/api/artwork-image-fallback?" in js
+    assert "data-artwork-title" in js

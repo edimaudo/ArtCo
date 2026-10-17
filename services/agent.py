@@ -9,7 +9,7 @@ from typing import Any
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .image_proxy import display_image_url, is_allowed_detail_url
-from .llm import CandidateReview, InspirationImageAnalysisError, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
+from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -257,8 +257,8 @@ def _deterministic_score(
 
 
 def _has_image_candidate(work: Artwork) -> bool:
-    """True when a work has a direct thumbnail or an approved collection page for preview fallback."""
-    return _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")
+    """Recommendations must carry a concrete image URL; page-only records are not enough."""
+    return _usable_image_url(work.image_url)
 
 
 def _provider_configured(provider: Any) -> bool:
@@ -301,8 +301,7 @@ async def _research(
     status: list[dict[str, str]],
     *,
     include_extended_sources: bool = False,
-    stage_label: str = "Researching artwork sources",
-    stage_key: str = "artwork",
+    phase_label: str = "Researching artwork sources",
 ) -> tuple[list[Artwork], list[dict[str, Any]]]:
     """Search a bounded set of providers in parallel.
 
@@ -311,7 +310,7 @@ async def _research(
     per provider in each pass and only expands the source set when image-bearing
     results are insufficient.
     """
-    progress = {"label": stage_label, "state": "active"}
+    progress = {"label": phase_label, "state": "active"}
     status.append(progress)
     commercial = commercial_providers()
     institutional = institutional_providers()
@@ -350,7 +349,6 @@ async def _research(
         configured = _provider_configured(provider)
         source_stats[provider.name] = {
             "provider": provider.name,
-            "search_stage": stage_key,
             "configured": configured,
             "queries_attempted": 0,
             "results_found": 0,
@@ -705,21 +703,86 @@ def _build_learning_guide(goal: str | None, works: list[Artwork]) -> dict[str, A
 
 
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
-    """Run a time-bounded concierge search and return an image-ready shortlist.
+    """Search the written brief first, then require an image-led second pass when images are attached.
 
-    Written-request catalogue search always runs first. If inspiration images are
-    attached, a required visual-analysis step then drives a second catalogue search;
-    the app never returns a successful text-only result for an image-backed request.
-    Requests without images retain the short, single-pass response budget.
+    Text-only requests retain the short response target. Requests with images use a
+    longer API deadline because image interpretation and a second catalogue pass are
+    required work, not optional enrichment.
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
+    has_images = bool(request.inspiration_images)
+    response_target_ms = 17500 if has_images else 4500
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
+    # Learn about art produces an educational guide only. It does not run catalogue
+    # searches or surface artwork recommendations. When an inspiration image is
+    # attached, image interpretation is required and is folded into the guide.
+    if request.intent.value == "learn":
+        guide = _build_learning_guide(request.goal, [])
+        visual_analysis = None
+        if has_images:
+            if not config.GEMINI_API_KEY:
+                detail = "ArtCo could not interpret the attached image because image analysis is not configured. No guide was returned without using the image. Configure Gemini and retry, or remove the image to request a text-only guide."
+                return {
+                    "success": False, "error_type": "RequiredVisualSearchFailed", "detail": detail,
+                    "diagnostics": {"duration_ms": round((loop.time() - started) * 1000), "response_target_ms": response_target_ms, "gemini_configured": False, "text_guide_generated": True},
+                    "visual_inspiration": {"image_count": len(request.inspiration_images), "analyzed": False, "message": detail},
+                    "results": [], "not_for_sale": [], "status": status,
+                }
+            try:
+                visual_analysis = await asyncio.wait_for(
+                    analyze_inspiration_images(request.goal or "", request.inspiration_images), timeout=8.5
+                )
+            except Exception as exc:
+                logger.warning("Required learning-image interpretation failed (%s)", type(exc).__name__)
+                visual_analysis = None
+            if visual_analysis is None:
+                detail = "ArtCo prepared the learning topic but could not interpret the attached image. No image-independent guide was returned. Check the image-analysis configuration and retry, or remove the image to request a text-only guide."
+                return {
+                    "success": False, "error_type": "RequiredVisualSearchFailed", "detail": detail,
+                    "diagnostics": {"duration_ms": round((loop.time() - started) * 1000), "response_target_ms": response_target_ms, "gemini_configured": bool(config.GEMINI_API_KEY), "gemini_model": config.GEMINI_MODEL, "text_guide_generated": True},
+                    "visual_inspiration": {"image_count": len(request.inspiration_images), "analyzed": False, "message": detail},
+                    "results": [], "not_for_sale": [], "status": status,
+                }
+            visual_note = visual_analysis.summary.strip()
+            if visual_note:
+                guide["overview"] += f" Your attached image offers a visual point of comparison: {visual_note}"
+            image_traits = list(dict.fromkeys([*visual_analysis.visual_attributes, *visual_analysis.colour_palette]))
+            if image_traits:
+                guide["look_closer"] = [f"Compare the image's {trait} with the ideas described above." for trait in image_traits[:3]] + guide["look_closer"][:2]
+            guide["source_note"] = "The attached image was interpreted as part of this guide. The visual description is a starting point for observation, not a verified identification or provenance record."
+            status.append({"label": "Attached image incorporated into the learning guide", "state": "done"})
+        status.append({"label": "Learning guide generated", "state": "done"})
+        elapsed = round((loop.time() - started) * 1000)
+        return {
+            "success": True,
+            "intent": "learn",
+            "summary": f"A learning guide to {guide['topic']}.",
+            "learning_guide": guide,
+            "results": [],
+            "not_for_sale": [],
+            "purchase_available": 0,
+            "total_found": 0,
+            "diagnostics": {
+                "duration_ms": elapsed, "response_target_ms": response_target_ms,
+                "gemini_configured": bool(config.GEMINI_API_KEY), "gemini_model": config.GEMINI_MODEL,
+                "text_guide_generated": True, "catalogue_search_performed": False,
+                "image_analysis_required": has_images, "image_analysis_performed": visual_analysis is not None,
+            },
+            "visual_inspiration": {
+                "image_count": len(request.inspiration_images), "analyzed": visual_analysis is not None,
+                "summary": visual_analysis.summary if visual_analysis else "",
+                "visual_attributes": visual_analysis.visual_attributes if visual_analysis else [],
+                "colour_palette": visual_analysis.colour_palette if visual_analysis else [],
+                "search_terms": visual_analysis.search_terms if visual_analysis else [],
+                "message": "Your image was incorporated into the learning guide." if visual_analysis else "",
+            },
+            "status": status,
+        }
+
     fallback_signals = RequestSignals(
-        cultural_references=list(dict.fromkeys(
-            request.loves + request.additional_interests
-        ))[:10],
+        cultural_references=list(dict.fromkeys(request.loves + request.additional_interests))[:10],
         art_interests=request.art_interests[:8],
         mediums=request.mediums[:6],
         room=request.room,
@@ -728,23 +791,16 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         budget_min=request.budget_min,
         budget_max=request.budget_max,
     )
-    directions = _fast_search_directions(request)
 
-    has_inspiration_images = bool(request.inspiration_images)
-    response_budget_seconds = 11.8 if has_inspiration_images else 4.25
-
-    # Request understanding and cultural enrichment can work in the background.
-    # Artwork search itself has a strict order: written brief first, then visual
-    # analysis and a second image-driven catalogue search when images were supplied.
     signals_task = asyncio.create_task(extract_request_signals(
         request.goal or "",
         request.loves,
         request.additional_interests + request.art_interests,
         request.avoid_references,
     ))
-    visual_task = None  # Deliberately not launched until the written-request search completes.
 
     async def qloo_after_signal_extraction() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        # Resolve taste references independently while the written search runs.
         try:
             qloo_signals = await asyncio.wait_for(asyncio.shield(signals_task), timeout=0.9)
             if not isinstance(qloo_signals, RequestSignals):
@@ -777,6 +833,217 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             return []
 
     qloo_direction_task = asyncio.create_task(qloo_art_direction_bridge())
+    optional_tasks = [signals_task, qloo_task, qloo_direction_task]
+
+    async def stop_optional_tasks() -> None:
+        pending_optional = [task for task in optional_tasks if not task.done()]
+        for task in pending_optional:
+            task.cancel()
+        if pending_optional:
+            await asyncio.gather(*pending_optional, return_exceptions=True)
+
+    # Phase 1: the written-request search always runs first. Image bytes are not
+    # sent to the vision model until this catalogue pass has completed. Fast text
+    # interpretation may enrich this first text pass, but image-derived terms cannot.
+    await asyncio.wait([signals_task], timeout=0.55)
+    early_signals = fallback_signals
+    if signals_task.done() and not signals_task.cancelled() and signals_task.exception() is None:
+        candidate_signals = signals_task.result()
+        try:
+            early_signals = candidate_signals if isinstance(candidate_signals, RequestSignals) else RequestSignals.model_validate(
+                candidate_signals.model_dump() if hasattr(candidate_signals, "model_dump") else candidate_signals
+            )
+        except Exception:
+            early_signals = fallback_signals
+    fast_text_directions = _fast_search_directions(request)
+    search_goal = _searchable_goal(request)
+    text_directions = list(dict.fromkeys([
+        search_goal,
+        *early_signals.art_interests[:2],
+        *request.art_interests[:2],
+        *request.mediums[:1],
+        *[item for item in fast_text_directions if item != search_goal],
+    ]))[:4]
+    text_directions = [item for item in text_directions if item]
+    text_works, text_source_diagnostics = await _research(
+        text_directions,
+        request,
+        status,
+        phase_label="Searching your written request",
+    )
+    status.append({
+        "label": "Written-request search complete",
+        "state": "done",
+        "detail": f"Searched the written brief and found {len(text_works)} catalogue records before image analysis.",
+    })
+
+    visual_analysis = None
+    visual_directions: list[str] = []
+    visual_works: list[Artwork] = []
+    visual_source_diagnostics: list[dict[str, Any]] = []
+    visual_search_performed = False
+
+    if has_images:
+        vision_progress = {"label": "Interpreting your inspiration images", "state": "active"}
+        status.append(vision_progress)
+
+        # Image use is mandatory when images were attached. Do not silently treat a
+        # missing key, provider failure, or timeout as permission to return text-only results.
+        if not config.GEMINI_API_KEY:
+            vision_progress.update({"state": "warning", "detail": "Gemini image analysis is not configured."})
+            await stop_optional_tasks()
+            detail = (
+                "ArtCo completed the written-request search, but an image was attached and image analysis is required. "
+                "Gemini is not configured, so ArtCo has not returned text-only recommendations. Add GEMINI_API_KEY and retry, "
+                "or remove the image to run a text-only search."
+            )
+            return {
+                "success": False,
+                "error_type": "RequiredVisualSearchFailed",
+                "detail": detail,
+                "diagnostics": {
+                    "duration_ms": round((loop.time() - started) * 1000),
+                    "response_target_ms": response_target_ms,
+                    "gemini_configured": False,
+                    "text_search_completed": True,
+                    "text_search_results_found": len(text_works),
+                    "text_source_diagnostics": text_source_diagnostics,
+                },
+                "visual_inspiration": {
+                    "image_count": len(request.inspiration_images),
+                    "analyzed": False,
+                    "message": detail,
+                },
+                "results": [],
+                "not_for_sale": [],
+                "status": status,
+            }
+
+        try:
+            # Deliberately after the full text search. The image-attached endpoint
+            # allows up to 17.5 seconds for text search + vision + visual search.
+            visual_analysis = await asyncio.wait_for(
+                analyze_inspiration_images(request.goal or "", request.inspiration_images),
+                timeout=8.5,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Required inspiration-image analysis exceeded its 8.5-second phase limit")
+            visual_analysis = None
+        except Exception as exc:
+            logger.warning("Required inspiration-image analysis failed (%s)", type(exc).__name__)
+            visual_analysis = None
+
+        if visual_analysis is None:
+            vision_progress.update({"state": "warning", "detail": "Image analysis failed or timed out."})
+            await stop_optional_tasks()
+            detail = (
+                "ArtCo completed the written-request search, but could not interpret the attached image. "
+                "Because an image was attached, ArtCo has not returned text-only recommendations. Check Gemini's API key and model configuration, "
+                "then retry, or remove the image to run a text-only search."
+            )
+            return {
+                "success": False,
+                "error_type": "RequiredVisualSearchFailed",
+                "detail": detail,
+                "diagnostics": {
+                    "duration_ms": round((loop.time() - started) * 1000),
+                    "response_target_ms": response_target_ms,
+                    "gemini_configured": bool(config.GEMINI_API_KEY),
+                    "gemini_model": config.GEMINI_MODEL,
+                    "text_search_completed": True,
+                    "text_search_results_found": len(text_works),
+                    "text_source_diagnostics": text_source_diagnostics,
+                },
+                "visual_inspiration": {
+                    "image_count": len(request.inspiration_images),
+                    "analyzed": False,
+                    "message": detail,
+                },
+                "results": [],
+                "not_for_sale": [],
+                "status": status,
+            }
+
+        visual_directions = list(dict.fromkeys([
+            *(str(term).strip() for term in visual_analysis.search_terms if str(term).strip()),
+            *(str(term).strip() for term in visual_analysis.visual_attributes if str(term).strip()),
+        ]))[:4]
+        if not visual_directions and visual_analysis.colour_palette:
+            palette = ", ".join(str(value).strip() for value in visual_analysis.colour_palette if str(value).strip())
+            if palette:
+                visual_directions = [f"artwork with a {palette} colour palette"]
+        if not visual_directions and visual_analysis.summary.strip():
+            visual_directions = [visual_analysis.summary.strip()[:180]]
+        if not visual_directions:
+            vision_progress.update({"state": "warning", "detail": "The image analysis returned no usable search terms."})
+            await stop_optional_tasks()
+            detail = (
+                "ArtCo received the image, but the image analysis did not produce usable art-search terms. "
+                "No text-only recommendations were returned. Try a clearer image, or remove the image to run a text-only search."
+            )
+            return {
+                "success": False,
+                "error_type": "RequiredVisualSearchFailed",
+                "detail": detail,
+                "diagnostics": {
+                    "duration_ms": round((loop.time() - started) * 1000),
+                    "response_target_ms": response_target_ms,
+                    "gemini_configured": bool(config.GEMINI_API_KEY),
+                    "gemini_model": config.GEMINI_MODEL,
+                    "text_search_completed": True,
+                    "text_search_results_found": len(text_works),
+                    "text_source_diagnostics": text_source_diagnostics,
+                },
+                "visual_inspiration": {
+                    "image_count": len(request.inspiration_images),
+                    "analyzed": True,
+                    "summary": visual_analysis.summary,
+                    "visual_attributes": visual_analysis.visual_attributes,
+                    "colour_palette": visual_analysis.colour_palette,
+                    "search_terms": visual_analysis.search_terms,
+                    "message": detail,
+                },
+                "results": [],
+                "not_for_sale": [],
+                "status": status,
+            }
+
+        vision_progress.update({"state": "done", "detail": "Image-derived search terms are ready."})
+        visual_terms = list(dict.fromkeys([
+            *visual_directions,
+            *(str(value).strip() for value in visual_analysis.colour_palette if str(value).strip()),
+        ]))
+        visual_request = request.model_copy(update={
+            "art_interests": list(dict.fromkeys([*request.art_interests, *visual_terms]))[:8]
+        })
+
+        # Phase 2: run a separate provider search using image-derived terms, then
+        # combine both pools for ranking. This pass is awaited, not background work.
+        visual_works, visual_source_diagnostics = await _research(
+            visual_directions,
+            visual_request,
+            status,
+            phase_label="Searching for artwork that matches your images",
+        )
+        visual_search_performed = True
+        status.append({
+            "label": "Image-directed search complete",
+            "state": "done" if visual_works else "warning",
+            "detail": (
+                f"The image search returned {len(visual_works)} catalogue records."
+                if visual_works else
+                "Image analysis ran and a separate image-directed search was attempted, but connected sources returned no artwork records for those visual terms."
+            ),
+        })
+        request = visual_request
+
+    # Wait only briefly for independent cultural enrichment; neither search phase
+    # depends on it, and attached-image analysis/search has already completed.
+    grace = min(0.55, max(0.0, 4.25 - (loop.time() - started)))
+    pending_optional = [task for task in optional_tasks if not task.done()]
+    if pending_optional and grace > 0:
+        await asyncio.wait(pending_optional, timeout=grace)
+    await stop_optional_tasks()
 
     def completed_result(task: asyncio.Task, default: Any) -> Any:
         if not task.done() or task.cancelled():
@@ -787,180 +1054,68 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             logger.warning("Optional concierge task failed (%s)", type(exc).__name__)
             return default
 
-    background_tasks = [signals_task, qloo_task, qloo_direction_task]
-    early_visual = None
-    if has_inspiration_images:
-        # Stage 1: complete the text/catalogue search without any image-derived terms.
-        text_directions = _fast_search_directions(request)
-        text_works, text_diagnostics = await _research(
-            text_directions, request, status,
-            stage_label="Searching your written request", stage_key="text",
-        )
-
-        # Stage 2: images are a required search input. Do not return a successful
-        # text-only result if interpretation fails or exceeds its allotted time.
-        try:
-            visual_analysis = await asyncio.wait_for(
-                analyze_inspiration_images(request.goal or "", request.inspiration_images),
-                timeout=4.5,
-            )
-        except asyncio.TimeoutError as exc:
-            for task in background_tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-            raise InspirationImageAnalysisError(
-                "The written-request search completed, but ArtCo could not finish interpreting your uploaded image in time. "
-                "The image search is required, so this request was not returned as a text-only result. Retry with a smaller image."
-            ) from exc
-        except InspirationImageAnalysisError:
-            for task in background_tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-            raise
-        if visual_analysis is None:
-            for task in background_tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-            raise InspirationImageAnalysisError(
-                "The written-request search completed, but the image analysis returned no result. "
-                "The image search is required. Check the visual analysis configuration and retry."
-            )
-
-        status.append({"label": "Interpreting your inspiration images", "state": "done"})
-        visual_terms = list(dict.fromkeys(
-            str(term).strip()
-            for term in [
-                *visual_analysis.search_terms,
-                *visual_analysis.visual_attributes,
-                *visual_analysis.colour_palette,
-                visual_analysis.summary,
-            ]
-            if isinstance(term, str) and term.strip()
-        ))[:8]
-        palette_query = " ".join(visual_analysis.colour_palette[:4]).strip()
-        image_directions = list(dict.fromkeys([
-            *visual_analysis.search_terms,
-            *visual_analysis.visual_attributes,
-            *( [f"{palette_query} art"] if palette_query else [] ),
-            visual_analysis.summary,
-        ]))
-        image_directions = [term.strip() for term in image_directions if isinstance(term, str) and term.strip()][:4]
-        if not image_directions:
-            for task in background_tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-            raise InspirationImageAnalysisError(
-                "ArtCo could not identify searchable visual characteristics in the uploaded image. "
-                "The image search is required; try a clearer image and retry."
-            )
-
-        # The image-derived traits affect both the second provider query and the
-        # ranking of merged results; existing written preferences are retained.
-        request = request.model_copy(update={
-            "art_interests": list(dict.fromkeys([*request.art_interests, *visual_terms]))[:8],
-        })
-        image_works, image_diagnostics = await _research(
-            image_directions, request, status,
-            include_extended_sources=True,
-            stage_label="Searching your inspiration images", stage_key="image",
-        )
-        merged: dict[str, Artwork] = {work.id: work for work in text_works}
-        # Prefer the image-pass representation of duplicates so its matched query
-        # remains available to the relevance scorer. Unique text matches are retained.
-        for work in image_works:
-            merged[work.id] = work
-        works = list(merged.values())
-        source_diagnostics = [*text_diagnostics, *image_diagnostics]
-        directions = list(dict.fromkeys([*text_directions, *image_directions]))[:8]
-    else:
-        # No image was attached: preserve the fast, single-pass text workflow.
-        await asyncio.wait([signals_task], timeout=0.55)
-        early_signals = completed_result(signals_task, fallback_signals)
-        if not isinstance(early_signals, RequestSignals):
-            try:
-                early_signals = RequestSignals.model_validate(early_signals.model_dump() if hasattr(early_signals, "model_dump") else early_signals)
-            except Exception:
-                early_signals = fallback_signals
-        fallback_directions = _fast_search_directions(request)
-        search_goal = _searchable_goal(request)
-        directions = list(dict.fromkeys([
-            search_goal,
-            *early_signals.art_interests[:2],
-            *request.art_interests[:2],
-            *request.mediums[:1],
-            *[item for item in fallback_directions if item != search_goal],
-        ]))[:4]
-        directions = [direction for direction in directions if direction]
-        research_task = asyncio.create_task(_research(
-            directions, request, status, stage_label="Searching your written request", stage_key="text",
-        ))
-        wait_budget = min(3.45, max(0.05, response_budget_seconds - (loop.time() - started) - 0.45))
-        try:
-            await asyncio.wait_for(asyncio.shield(research_task), timeout=wait_budget)
-        except Exception as exc:
-            logger.warning("Primary artwork search did not finish within the response budget (%s)", type(exc).__name__)
-            if not research_task.done():
-                research_task.cancel()
-        grace = min(0.55, max(0.0, response_budget_seconds - (loop.time() - started) - 0.25))
-        optional_pending = [task for task in background_tasks if not task.done()]
-        if optional_pending and grace > 0:
-            await asyncio.wait(optional_pending, timeout=grace)
-        research_result = completed_result(research_task, ([], []))
-        works, source_diagnostics = research_result
-        visual_analysis = None
-
-    # Let cultural enrichment finish only when there is remaining budget; it never
-    # substitutes for the required text/image search stages.
-    optional_pending = [task for task in background_tasks if not task.done()]
-    remaining_budget = max(0.0, response_budget_seconds - (loop.time() - started) - 0.15)
-    enrichment_grace = min(0.25 if has_inspiration_images else 0.0, remaining_budget)
-    if optional_pending and enrichment_grace > 0:
-        await asyncio.wait(optional_pending, timeout=enrichment_grace)
-    pending = [task for task in background_tasks if not task.done()]
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-
     signals = completed_result(signals_task, fallback_signals)
     if not isinstance(signals, RequestSignals):
         try:
             signals = RequestSignals.model_validate(signals.model_dump() if hasattr(signals, "model_dump") else signals)
         except Exception:
             signals = fallback_signals
+
+    if visual_analysis:
+        visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes, *visual_analysis.colour_palette]
+        signals.art_interests = list(dict.fromkeys([*visual_terms, *signals.art_interests]))[:8]
+        request = request.model_copy(update={
+            "art_interests": list(dict.fromkeys([*request.art_interests, *signals.art_interests]))[:8]
+        })
+
     qloo_result = completed_result(qloo_task, ([], []))
     resolved, qloo_artists = qloo_result if isinstance(qloo_result, tuple) and len(qloo_result) == 2 else ([], [])
     cultural_art_directions = completed_result(qloo_direction_task, [])
     cultural_art_directions = [str(item).strip() for item in cultural_art_directions if isinstance(item, str) and item.strip()][:8]
 
-    if visual_analysis:
-        visual_terms = [*visual_analysis.search_terms, *visual_analysis.visual_attributes]
-        signals.art_interests = list(dict.fromkeys([*visual_terms, *signals.art_interests]))[:8]
-        status.append({"label": "Image-based artwork search completed", "state": "done"})
-    elif request.inspiration_images:
-        # Defensive invariant: images may never silently fall back to text-only mode.
-        raise InspirationImageAnalysisError("The required image-based search did not complete. Retry the search.")
-
     request = _apply_signal_overrides(request, signals)
     for entry in status:
         if entry.get("state") == "active":
             entry["state"] = "skipped"
-            entry.setdefault("detail", "Skipped to preserve the response time budget.")
-    if not source_diagnostics:
-        status.append({"label": "Artwork sources did not respond in time", "state": "warning"})
+            entry.setdefault("detail", "Skipped because the search phases had priority.")
+
+    # Merge the original text pool and the required image-directed pool, retaining
+    # distinct catalogue records and the first version of duplicate IDs.
+    merged_by_id: dict[str, Artwork] = {}
+    for work in [*text_works, *visual_works]:
+        if _budget_ok(work, request):
+            merged_by_id.setdefault(work.id, work)
+    works = list(merged_by_id.values())
+
+    source_map: dict[str, dict[str, Any]] = {}
+    for phase_name, diagnostics in (("text", text_source_diagnostics), ("image", visual_source_diagnostics)):
+        for stat in diagnostics:
+            name = str(stat.get("provider") or "Unknown source")
+            target = source_map.setdefault(name, {
+                "provider": name,
+                "configured": bool(stat.get("configured")),
+                "queries_attempted": 0,
+                "results_found": 0,
+                "images_found": 0,
+                "errors": [],
+                "text_queries_attempted": 0,
+                "image_queries_attempted": 0,
+            })
+            for metric in ("queries_attempted", "results_found", "images_found"):
+                target[metric] += int(stat.get(metric) or 0)
+            target[f"{phase_name}_queries_attempted"] += int(stat.get("queries_attempted") or 0)
+            for error in stat.get("errors") or []:
+                if error not in target["errors"]:
+                    target["errors"].append(error)
+
+    source_diagnostics = list(source_map.values())
+    directions = list(dict.fromkeys([*text_directions, *visual_directions]))[:8]
     if not directions:
         directions = ["contemporary art"]
 
-    # Only works with a direct thumbnail or a verified public collection page
-    # enter visible recommendations. The page is a fallback for missing API thumbnails.
+    # Filter to works with a direct thumbnail or approved collection preview page.
     works = [work for work in works if _has_image_candidate(work) and _budget_ok(work, request)]
     status.append({"label": "Selecting the strongest matches", "state": "done"})
-    # Deterministic fit scoring is immediate; model-based candidate review was
-    # removed from the blocking path because it added a second serial LLM round.
     review = None
     selected = _select(works, request, qloo_artists, review, cultural_art_directions)
     review_data = _review_map(review)
@@ -990,16 +1145,25 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "buy": "I prioritised commercial works marked as available to acquire. Additional works that are not for sale are shown separately when useful.",
         "learn": "I searched the requested artistic territory and selected works that help put the subject into context.",
     }[request.intent.value]
+    if visual_analysis:
+        visual_message = (
+            "These visual characteristics informed a separate artwork search and the relevance ranking."
+            if visual_works else
+            "The image was interpreted and used for a separate artwork search, but connected sources returned no records for those visual terms. The written-request results remain available, with visual characteristics included in relevance ranking."
+        )
+    else:
+        visual_message = ""
 
     return {
         "success": True,
         "intent": request.intent.value,
         "diagnostics": {
             "duration_ms": round((loop.time() - started) * 1000),
-            "response_target_ms": int(response_budget_seconds * 1000),
+            "response_target_ms": response_target_ms,
             "qloo_configured": bool(config.QLOO_API_KEY),
             "qloo_base_url": config.QLOO_BASE_URL,
             "gemini_configured": bool(config.GEMINI_API_KEY),
+            "gemini_model": config.GEMINI_MODEL,
             "commercial_sources_configured": [
                 name for name, configured in [
                     ("Artsy", bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)),
@@ -1011,13 +1175,22 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
             "image_bearing_works_found": len(works),
             "source_diagnostics": source_diagnostics,
+            "text_search": {
+                "performed": True,
+                "directions": text_directions,
+                "results_found": len(text_works),
+                "source_diagnostics": text_source_diagnostics,
+            },
+            "image_search": {
+                "required": has_images,
+                "performed": visual_search_performed,
+                "directions": visual_directions,
+                "results_found": len(visual_works),
+                "source_diagnostics": visual_source_diagnostics,
+            },
             "entity_matches_found": len(resolved),
             "related_artists_found": len(qloo_artists),
             "cultural_art_directions_used": len(cultural_art_directions),
-            "text_search_completed": True,
-            "image_search_required": has_inspiration_images,
-            "image_search_completed": visual_analysis is not None and has_inspiration_images,
-            "image_search_result_count": sum(int(stat.get("results_found", 0)) for stat in source_diagnostics if stat.get("search_stage") == "image"),
         },
         "summary": intent_summary,
         "learning_guide": _build_learning_guide(request.goal, primary) if request.intent.value == "learn" else None,
@@ -1028,12 +1201,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "visual_attributes": visual_analysis.visual_attributes if visual_analysis else [],
             "colour_palette": visual_analysis.colour_palette if visual_analysis else [],
             "search_terms": visual_analysis.search_terms if visual_analysis else [],
-            "search_completed": visual_analysis is not None and has_inspiration_images,
-            "message": (
-                "The written request was searched first. These visible characteristics then informed a second artwork search."
-                if visual_analysis and has_inspiration_images
-                else ""
-            ),
+            "message": visual_message,
         },
         "brief": {
             "intent": request.intent.value,
@@ -1067,6 +1235,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "total_found": len(works),
         "status": status,
     }
+
 
 
 def _serialize(

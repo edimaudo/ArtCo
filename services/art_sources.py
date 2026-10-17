@@ -65,7 +65,7 @@ class ArtInstituteProvider:
             payload = response.json()
         iiif = payload.get("config", {}).get("iiif_url", "https://www.artic.edu/iiif/2")
         output = [self._map(item, iiif) for item in payload.get("data", [])]
-        return [work for work in output if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")][:limit]
+        return [work for work in output if _usable_image_url(work.image_url)][:limit]
 
     def _map(self, item: dict[str, Any], iiif: str) -> Artwork:
         image_id = item.get("image_id")
@@ -115,7 +115,7 @@ class MetProvider:
                 work = self._map(result.json())
             except (TypeError, ValueError):
                 continue
-            if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or ""):
+            if _usable_image_url(work.image_url):
                 output.append(work)
         return output[:limit]
 
@@ -148,7 +148,7 @@ class ClevelandProvider:
             response.raise_for_status()
             payload = response.json()
         output = [self._map(item) for item in (payload.get("data") or []) if isinstance(item, dict)]
-        return [work for work in output if _usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or "")][:limit]
+        return [work for work in output if _usable_image_url(work.image_url)][:limit]
 
     def _map(self, item: dict[str, Any]) -> Artwork:
         images = item.get("images") or {}
@@ -205,7 +205,7 @@ class RijksmuseumProvider:
                 *(self._resolve_work(client, uri) for uri in identifiers),
                 return_exceptions=True,
             )
-        return [work for work in works if isinstance(work, Artwork) and (_usable_image_url(work.image_url) or is_allowed_detail_url(work.detail_url or ""))][:limit]
+        return [work for work in works if isinstance(work, Artwork) and _usable_image_url(work.image_url)][:limit]
 
     async def _get_linked_record(self, client: httpx.AsyncClient, uri: str) -> dict[str, Any]:
         parsed = urlparse(uri)

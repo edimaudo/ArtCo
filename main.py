@@ -5,6 +5,9 @@ import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
+from difflib import SequenceMatcher
+import re
+import time
 from html.parser import HTMLParser
 
 import httpx
@@ -16,14 +19,14 @@ from fastapi.templating import Jinja2Templates
 
 from models.schemas import ConciergeRequest
 from services.concierge import run
-from services.llm import InspirationImageAnalysisError
 from services.payments import PaymentUnavailable, PaymentConfigurationError, CheckoutSessionNotFound, create_checkout_session, retrieve_checkout_session, parse_webhook, verify_webhook_signature
-from services.image_proxy import is_allowed_detail_url, is_allowed_image_url
+from services.image_proxy import display_image_url, is_allowed_detail_url, is_allowed_image_url
 from services.config import REQUEST_TIMEOUT
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 CONCIERGE_RESPONSE_TIMEOUT_SECONDS = 4.6
+CONCIERGE_IMAGE_RESPONSE_TIMEOUT_SECONDS = 17.5
 
 app = FastAPI(
     title="ArtCo | Your personal art concierge",
@@ -186,7 +189,7 @@ class _ArtworkImageMetadataParser(HTMLParser):
                     self.candidates.append(href.strip())
         elif tag_name == "img":
             image_values = []
-            for key in ("data-full-image", "data-zoom-image", "data-original", "data-lazy-src", "data-src", "src"):
+            for key in ("data-full-image", "data-zoom-image", "data-original", "data-lazy-src", "data-src", "data-original-src", "data-image", "src"):
                 value = attributes.get(key)
                 if value:
                     image_values.append(value.strip())
@@ -231,7 +234,7 @@ async def _get_allowed_redirected_url(
 
 @app.get("/api/artwork-preview")
 async def artwork_preview_from_source(url: str) -> Response:
-    """Resolve an artwork page's primary image when its API thumbnail is missing/broken."""
+    """Resolve a source page's artwork image, trying every safe candidate before failing."""
     if not is_allowed_detail_url(url):
         raise HTTPException(status_code=400, detail="This artwork source page is not supported by ArtCo.")
     headers = {
@@ -251,41 +254,42 @@ async def artwork_preview_from_source(url: str) -> Response:
             parser = _ArtworkImageMetadataParser()
             parser.feed(page.text)
             page_base = str(page.url or url)
-            raw_candidates = list(parser.candidates) + [candidate for _, candidate in sorted(parser.inline_candidates, key=lambda item: item[0], reverse=True)]
-            image_url = None
-            for candidate in raw_candidates:
+            ordered_candidates = list(parser.candidates) + [
+                candidate for _, candidate in sorted(parser.inline_candidates, key=lambda item: item[0], reverse=True)
+            ]
+            seen: set[str] = set()
+            for candidate in ordered_candidates:
                 candidate_url = urljoin(page_base, candidate.strip())
-                # Many collection pages still publish http image metadata. Upgrade
-                # only when the exact same hostname is already in the HTTPS allowlist.
                 if candidate_url.lower().startswith("http://"):
                     secure_candidate = "https://" + candidate_url[len("http://"):]
                     if is_allowed_image_url(secure_candidate):
                         candidate_url = secure_candidate
-                if is_allowed_image_url(candidate_url):
-                    image_url = candidate_url
-                    break
-            if not image_url:
-                raise HTTPException(status_code=404, detail="No supported artwork preview was found on the source page.")
-            image_response = await _get_allowed_redirected_url(
-                client,
-                image_url,
-                is_allowed_image_url,
-                {"Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "User-Agent": "ArtCoArtworkImageProxy/1.0"},
-            )
-            if image_response.status_code != 200:
-                raise HTTPException(status_code=502, detail="The artwork preview could not be loaded.")
-            if len(image_response.content) > MAX_PROXY_IMAGE_BYTES:
-                raise HTTPException(status_code=413, detail="The artwork preview is too large to display.")
-            content_type = _sniff_image_media_type(
-                image_response.headers.get("content-type", ""), image_response.content
-            )
-            if not content_type:
-                raise HTTPException(status_code=502, detail="The source preview was not an image.")
-            return Response(
-                content=image_response.content,
-                media_type=content_type,
-                headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"},
-            )
+                if candidate_url in seen or not is_allowed_image_url(candidate_url):
+                    continue
+                seen.add(candidate_url)
+                try:
+                    image_response = await _get_allowed_redirected_url(
+                        client,
+                        candidate_url,
+                        is_allowed_image_url,
+                        {"Accept": "image/avif,image/webp,image/*,*/*;q=0.8", "User-Agent": "ArtCoArtworkImageProxy/1.0"},
+                    )
+                except (HTTPException, httpx.HTTPError, TimeoutError) as exc:
+                    logger.debug("Skipping failed artwork preview candidate (%s)", type(exc).__name__)
+                    continue
+                if image_response.status_code != 200 or len(image_response.content) > MAX_PROXY_IMAGE_BYTES:
+                    continue
+                content_type = _sniff_image_media_type(
+                    image_response.headers.get("content-type", ""), image_response.content
+                )
+                if not content_type:
+                    continue
+                return Response(
+                    content=image_response.content,
+                    media_type=content_type,
+                    headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"},
+                )
+            raise HTTPException(status_code=404, detail="No retrievable artwork image was found on the source page.")
     except HTTPException:
         raise
     except (httpx.HTTPError, TimeoutError) as exc:
@@ -353,6 +357,75 @@ async def proxy_artwork_image(url: str) -> Response:
         logger.info("Artwork image proxy failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=502, detail="The artwork image is temporarily unavailable.") from exc
     raise HTTPException(status_code=502, detail="The image provider redirected too many times.")
+
+
+_ARTWORK_IMAGE_FALLBACK_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _normalised_match_text(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", (value or "").casefold()))
+
+
+def _artwork_match_score(target_title: str, target_artist: str, candidate_title: str, candidate_artist: str) -> float:
+    target_title_n = _normalised_match_text(target_title)
+    candidate_title_n = _normalised_match_text(candidate_title)
+    if not target_title_n or not candidate_title_n:
+        return 0.0
+    title_ratio = SequenceMatcher(None, target_title_n, candidate_title_n).ratio()
+    target_tokens = set(target_title_n.split())
+    candidate_tokens = set(candidate_title_n.split())
+    overlap = len(target_tokens & candidate_tokens) / max(1, len(target_tokens | candidate_tokens))
+    title_score = max(title_ratio, overlap)
+    target_artist_n = _normalised_match_text(target_artist)
+    candidate_artist_n = _normalised_match_text(candidate_artist)
+    if target_artist_n and candidate_artist_n and not target_artist_n.startswith("unknown"):
+        artist_ratio = SequenceMatcher(None, target_artist_n, candidate_artist_n).ratio()
+        artist_tokens = set(target_artist_n.split())
+        candidate_artist_tokens = set(candidate_artist_n.split())
+        artist_overlap = len(artist_tokens & candidate_artist_tokens) / max(1, len(artist_tokens | candidate_artist_tokens))
+        artist_score = max(artist_ratio, artist_overlap)
+        if title_score < 0.92 and artist_score < 0.5:
+            return 0.0
+        return title_score * 0.72 + artist_score * 0.28
+    return title_score
+
+
+@app.get("/api/artwork-image-fallback")
+async def artwork_image_fallback(title: str = "", artist: str = "") -> Response:
+    """Recover a missing thumbnail by finding the same work in public museum collections."""
+    clean_title = " ".join(title.split())[:180]
+    clean_artist = " ".join(artist.split())[:140]
+    if len(clean_title) < 2:
+        raise HTTPException(status_code=400, detail="An artwork title is required to recover its image.")
+    key = (_normalised_match_text(clean_title), _normalised_match_text(clean_artist))
+    cached = _ARTWORK_IMAGE_FALLBACK_CACHE.get(key)
+    image_url = cached[1] if cached and cached[0] > time.time() else ""
+    if not image_url:
+        from services.art_sources import ArtInstituteProvider, MetProvider, ClevelandProvider
+        query = " ".join(part for part in (clean_title, clean_artist) if part and not part.casefold().startswith("unknown"))
+        providers = [ArtInstituteProvider(), MetProvider(), ClevelandProvider()]
+        results = await asyncio.gather(
+            *(asyncio.wait_for(provider.search(query, limit=4), timeout=6.0) for provider in providers),
+            return_exceptions=True,
+        )
+        candidates = []
+        for batch in results:
+            if isinstance(batch, Exception):
+                continue
+            for work in batch:
+                if not work.image_url or not is_allowed_image_url(work.image_url):
+                    continue
+                score = _artwork_match_score(clean_title, clean_artist, work.title, work.artist)
+                if score >= 0.68:
+                    candidates.append((score, work.image_url))
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            image_url = candidates[0][1]
+            _ARTWORK_IMAGE_FALLBACK_CACHE[key] = (time.time() + 6 * 60 * 60, image_url)
+    if not image_url:
+        raise HTTPException(status_code=404, detail="No matching public artwork image could be recovered.")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=display_image_url(image_url) or image_url, status_code=307, headers={"Cache-Control": "public, max-age=21600"})
 
 
 @app.get("/health")
@@ -445,11 +518,20 @@ async def diagnostics_live() -> dict[str, Any]:
 
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
+    # Image-attached requests require sequential work: complete the written search,
+    # interpret the image, then run a separate visual search. Give that path its own
+    # deadline instead of cancelling the required image phase at 4.6 seconds.
+    timeout_seconds = (
+        CONCIERGE_IMAGE_RESPONSE_TIMEOUT_SECONDS
+        if payload.inspiration_images
+        else CONCIERGE_RESPONSE_TIMEOUT_SECONDS
+    )
     try:
-        request_timeout = 12.2 if payload.inspiration_images else CONCIERGE_RESPONSE_TIMEOUT_SECONDS
         result: dict[str, Any] = await asyncio.wait_for(
-            run(payload), timeout=request_timeout
+            run(payload), timeout=timeout_seconds
         )
+        if result.get("success") is False:
+            return JSONResponse(result, status_code=503)
         # Enforce the visible-card limit at the API boundary as well as in the
         # agent and UI. This prevents a stale/alternate agent response from
         # rendering a second shortlist beneath the primary three cards.
@@ -459,25 +541,21 @@ async def concierge(payload: ConciergeRequest) -> JSONResponse:
         result["results"] = primary
         result["not_for_sale"] = secondary
         return JSONResponse(result)
-    except InspirationImageAnalysisError as exc:
-        logger.warning("Required image-based search could not complete: %s", str(exc))
-        return JSONResponse(
-            {"success": False, "detail": str(exc), "error_type": "InspirationImageAnalysisError"},
-            status_code=503,
-        )
     except asyncio.TimeoutError:
-        logger.warning("Concierge request exceeded its response deadline")
-        deadline_detail = (
-            "This image-backed search could not complete within the response deadline. ArtCo did not substitute a text-only result; retry with fewer or smaller images."
-            if payload.inspiration_images
-            else "This search exceeded ArtCo’s response-time limit. Try a more focused request."
-        )
+        logger.warning("Concierge request exceeded the %.1f second API deadline", timeout_seconds)
+        if payload.inspiration_images:
+            detail = (
+                "The written-request search started, but ArtCo could not finish the required image interpretation and visual search "
+                "within the image-search deadline. No text-only results were returned. Retry with a clearer/smaller image, or remove it for a text-only search."
+            )
+        else:
+            detail = "This search exceeded ArtCo’s response-time limit. Try a more focused request."
         return JSONResponse(
             {
                 "success": False,
-                "detail": deadline_detail,
+                "detail": detail,
                 "error_type": "ResponseDeadlineExceeded",
-                "diagnostics": {"response_target_ms": int(request_timeout * 1000)},
+                "diagnostics": {"response_target_ms": int(timeout_seconds * 1000)},
             },
             status_code=504,
         )

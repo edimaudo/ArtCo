@@ -12,8 +12,8 @@
 
   <div class="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
     <button class="dashboard-tab is-active" id="overviewTab" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" tabindex="0">Overview</button>
-    <button class="dashboard-tab" id="purchasesTab" type="button" role="tab" aria-selected="false" aria-controls="purchasesPanel" tabindex="-1">Purchase tracking</button>
     <button class="dashboard-tab" id="tasteTab" type="button" role="tab" aria-selected="false" aria-controls="tastePanel" tabindex="-1">Your taste</button>
+    <button class="dashboard-tab" id="purchasesTab" type="button" role="tab" aria-selected="false" aria-controls="purchasesPanel" tabindex="-1">Purchases</button>
   </div>
 
   <section class="dashboard-tab-panel is-active" id="overviewPanel" role="tabpanel" aria-labelledby="overviewTab">
@@ -41,20 +41,6 @@
       </section>
     </div>
 
-  </section>
-
-  <section class="dashboard-tab-panel" id="purchasesPanel" role="tabpanel" aria-labelledby="purchasesTab" hidden>
-    <section class="dashboard-section dashboard-purchases" aria-labelledby="dashboardPurchasesHeading">
-      <div class="dashboard-heading">
-        <div>
-          <h2 id="dashboardPurchasesHeading">Purchase tracking</h2>
-          <p>Review checkouts started in this browser and verify payment with Stripe. Shipping and delivery updates come from the seller, not ArtCo.</p>
-        </div>
-      </div>
-      <div id="dashboardPurchases" class="purchase-history-list" aria-live="polite"></div>
-      <p id="dashboardPurchasesEmpty" class="empty-state">No purchase checkouts have been started in this browser.</p>
-      <p id="dashboardPurchasesMessage" class="action-message" role="status" aria-live="polite"></p>
-    </section>
   </section>
 
   <section class="dashboard-tab-panel" id="tastePanel" role="tabpanel" aria-labelledby="tasteTab" hidden>
@@ -107,5 +93,25 @@
     </div>
 
   </section>
+
+  <section class="dashboard-tab-panel" id="purchasesPanel" role="tabpanel" aria-labelledby="purchasesTab" hidden>
+    <section class="dashboard-section dashboard-purchases" aria-labelledby="dashboardPurchasesHeading">
+      <div class="dashboard-heading"><div><h2 id="dashboardPurchasesHeading">Purchases</h2></div></div>
+      <div id="dashboardPurchases" class="purchase-history-list" aria-live="polite"></div>
+      <p id="dashboardPurchasesMessage" class="action-message" role="status" aria-live="polite"></p>
+    </section>
+  </section>
+
+  <div class="modal-backdrop" id="tasteUnsavedModal" hidden>
+    <section class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tasteUnsavedHeading" aria-describedby="tasteUnsavedCopy" tabindex="-1">
+      <h2 id="tasteUnsavedHeading">Unsaved changes</h2>
+      <p id="tasteUnsavedCopy">You have changes to your taste that have not been saved. Would you like to save them before leaving?</p>
+      <div class="dialog-actions">
+        <button class="primary-button" id="saveTasteAndContinue" type="button">Save and continue</button>
+        <button class="secondary-button" id="discardTasteAndContinue" type="button">Discard changes</button>
+        <button class="text-button" id="stayOnTaste" type="button">Keep editing</button>
+      </div>
+    </section>
+  </div>
 </section>
 {% endblock %}

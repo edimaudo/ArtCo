@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261016-purchase-tracking" in response.text
+    assert "/static/js/app.js?v=20261017-image-recovery-taste-guard" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -191,11 +191,15 @@ def test_purchase_history_is_integrated_with_checkout_and_dashboard():
     assert "async function checkTrackedPurchase(sessionId, button)" in js
     assert "data-purchase-session=" in js
     assert 'id="dashboardPurchases"' in dashboard
-    assert 'id="dashboardPurchasesEmpty"' in dashboard
+    assert 'id="dashboardPurchasesEmpty"' not in dashboard
     assert 'id="purchasesTab"' in dashboard
     assert 'id="purchasesPanel"' in dashboard
     assert "dashboardTabs[(index + 1) % dashboardTabs.length]" in js
-    assert "Shipping and delivery updates come from the seller, not ArtCo." in dashboard
+    assert 'id="purchasesTab"' in dashboard and '>Purchases</button>' in dashboard
+    assert "No purchase checkouts have been started in this browser." not in dashboard
+    assert "Review checkouts started in this browser" not in dashboard
+    assert "Shipping and delivery updates come from the seller, not ArtCo." not in dashboard
+    assert dashboard.index('id="tasteTab"') < dashboard.index('id="purchasesTab"')
 
 
 def test_all_six_concierge_intents_have_distinct_ranking_or_selection_rules():
@@ -242,3 +246,51 @@ def test_all_six_concierge_intents_have_distinct_ranking_or_selection_rules():
     commercial = artwork("gallery", "Study", "Artist", source_kind="commercial", availability="available", description="Historical context")
     assert agent._deterministic_score(institutional, learn_request, [], "art history") > agent._deterministic_score(commercial, learn_request, [], "art history")
 
+
+
+def test_learn_intent_returns_guide_without_catalogue_recommendations(monkeypatch):
+    async def unexpected_search(*args, **kwargs):
+        raise AssertionError("Learn intent must not query art catalogues")
+
+    monkeypatch.setattr(agent, "_research", unexpected_search)
+    result = asyncio.run(agent.run_concierge(ConciergeRequest(intent="learn", goal="Explain impressionism")))
+    assert result["success"] is True
+    assert result["intent"] == "learn"
+    assert result["results"] == []
+    assert result["not_for_sale"] == []
+    assert result["learning_guide"]["topic"] == "impressionism"
+    assert result["learning_guide"]["related_works"] == []
+    assert result["diagnostics"]["catalogue_search_performed"] is False
+
+
+def test_only_works_with_concrete_image_urls_are_recommended():
+    direct = artwork("with-image", "Study", "Artist")
+    page_only = artwork("page-only", "Study", "Artist")
+    page_only.image_url = None
+    assert agent._has_image_candidate(direct) is True
+    assert agent._has_image_candidate(page_only) is False
+
+
+def test_learning_results_hide_recommendation_grid():
+    html = (ROOT / "templates/results.html").read_text()
+    js = (ROOT / "static/js/app.js").read_text()
+    assert 'id="recommendationsSection"' in html
+    assert 'id="refinePanel"' in html
+    assert "if (recommendationSection) recommendationSection.hidden = learningOnly;" in js
+    assert "if (refinePanel) refinePanel.hidden = learningOnly;" in js
+
+
+def test_taste_editor_changes_are_draft_only_and_prompt_before_navigation():
+    js = (ROOT / "static/js/app.js").read_text()
+    html = (ROOT / "templates/dashboard.html").read_text()
+    assert "state.tasteDraft.notes = event.target.value;" in js
+    assert "state.tasteDraft.discoveryLevel = Number(event.target.value);" in js
+    assert "function tasteDraftIsDirty()" in js
+    assert "function requestTasteNavigation(action)" in js
+    assert "$('#saveTasteAndContinue')?.addEventListener('click'" in js
+    assert "$('#discardTasteAndContinue')?.addEventListener('click'" in js
+    assert 'id="tasteUnsavedModal"' in html
+    assert "Keep editing" in html
+    css = (ROOT / "static/css/style.css").read_text()
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert ".taste-editor-lower .discovery-control" in css

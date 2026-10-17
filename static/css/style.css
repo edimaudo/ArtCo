@@ -694,17 +694,30 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .taste-editor-lower {
   margin-top: 48px;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr);
-  gap: 56px;
-  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 44px;
+  align-items: stretch;
 }
+.taste-editor-lower > div { min-width: 0; display: flex; flex-direction: column; }
+.taste-editor-lower .field-label { min-height: 2.8rem; display: flex; align-items: flex-start; }
 .taste-editor-lower textarea {
   width: 100%;
-  min-height: 220px;
+  min-height: 240px;
+  height: 240px;
+  resize: vertical;
   padding: 17px 18px;
   font-size: 1rem;
   line-height: 1.6;
 }
+.taste-editor-lower .discovery-control {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.taste-editor-lower .discovery-copy { min-height: 4.8em; }
+.taste-editor-lower .range-line { margin-top: auto; margin-bottom: auto; }
+.taste-editor-lower #tasteUpdated { margin-top: auto; }
 .taste-editor-grid .taste-help {
   margin-top: 10px;
   color: var(--muted);
@@ -1237,7 +1250,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .checkout-actions { flex-direction: column; align-items: stretch; }
 }
 
-/* Learn about art: an educational panel connected to the actual search results. */
+/* Learn about art: an education-only guide, separate from artwork recommendations. */
 .learning-guide {
   border: 1px solid var(--border, #dedbd5);
   border-radius: 18px;
@@ -1294,7 +1307,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .checkout-order-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
-/* Browser-local purchase tracking. Payment state is verified against Stripe on demand. */
+/* Purchases: payment status is verified server-side on demand. */
 .dashboard-purchases { margin-top: 42px; padding-top: 30px; border-top: 1px solid var(--border, #dedbd5); }
 .purchase-history-list { display: grid; gap: 0; border-top: 1px solid var(--border, #dedbd5); }
 .purchase-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .42fr); gap: 24px; align-items: center; padding: 18px 0; border-bottom: 1px solid var(--border, #dedbd5); }
@@ -1316,3 +1329,46 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .purchase-check-button { grid-column: 1 / -1; width: 100%; }
 }
 
+
+
+/* Save/discard confirmation for the taste editor. */
+.modal-backdrop[hidden] { display: none !important; }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(18 18 18 / 48%);
+}
+.dialog-card {
+  width: min(100%, 520px);
+  padding: 30px;
+  background: var(--surface, #fff);
+  color: var(--text, #222);
+  border: 1px solid var(--border, #dedbd5);
+  border-radius: 16px;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 20%);
+}
+.dialog-card h2 { margin: 0; font-size: 1.4rem; }
+.dialog-card p { margin: 14px 0 24px; color: var(--muted); line-height: 1.6; }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.dialog-actions .primary-button,
+.dialog-actions .secondary-button { min-height: 44px; }
+.dialog-actions .text-button { padding: 10px 12px; }
+.dialog-card:focus { outline: none; }
+.dialog-card :focus-visible { outline: 3px solid var(--focus, #254f9c); outline-offset: 3px; }
+
+/* Prefer clean whitespace over error copy when a preview is being recovered. */
+.art-placeholder { display: none !important; }
+@media (max-width: 860px) {
+  .taste-editor-lower { grid-template-columns: 1fr; }
+  .taste-editor-lower textarea { height: 220px; min-height: 220px; }
+  .taste-editor-lower .discovery-control { min-height: 220px; }
+}
+@media (max-width: 520px) {
+  .dialog-card { padding: 22px; }
+  .dialog-actions { flex-direction: column; align-items: stretch; }
+  .dialog-actions > button { width: 100%; }
+}
