@@ -740,23 +740,60 @@
     const resultsPage = $('#resultsPage');
     if (!resultsPage) return false;
     const raw = sessionStorage.getItem('artConciergePendingRequest');
-    if (!raw) return false;
+    if (!raw) {
+      // Never fall back to a cached previous search on a URL that explicitly
+      // represents a new run. The request handoff may have been cleared by a
+      // browser restore or storage failure; show a clean recoverable state.
+      const heading = $('#resultsHeading');
+      const summary = $('#resultsSummary');
+      const grid = $('#artGrid');
+      if (heading) heading.textContent = 'This search could not be started.';
+      if (summary) summary.textContent = 'Return to your concierge and submit the request again.';
+      if (grid) grid.innerHTML = '<p class="empty-state">No current request was received.</p>';
+      return false;
+    }
     let payload;
-    try { payload = JSON.parse(raw); } catch { sessionStorage.removeItem('artConciergePendingRequest'); return false; }
+    try { payload = JSON.parse(raw); } catch {
+      sessionStorage.removeItem('artConciergePendingRequest');
+      const heading = $('#resultsHeading');
+      const summary = $('#resultsSummary');
+      const grid = $('#artGrid');
+      if (heading) heading.textContent = 'This search could not be started.';
+      if (summary) summary.textContent = 'The request could not be read. Return to your concierge and try again.';
+      if (grid) grid.innerHTML = '<p class="empty-state">No current request was received.</p>';
+      return false;
+    }
     // Consume the one-time handoff before the API call. The image bytes are not
     // retained in sessionStorage, the current result object, or recent-search history.
     sessionStorage.removeItem('artConciergePendingRequest');
 
+    // Clear all previous-search output before this new request can paint. Do not
+    // render state.last while ?run=1 is active; it belongs to the prior search.
+    state.intent = payload.intent || state.intent;
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
     const resultsMeta = $('#resultsMeta');
     const grid = $('#artGrid');
     const notForSaleSection = $('#notForSaleSection');
-    resultsHeading.textContent = 'I’m researching that now.';
-    resultsSummary.textContent = 'Your concierge is matching your brief against the available art sources.';
-    resultsMeta.textContent = '';
-    grid.innerHTML = '<p class="empty-state">Searching and narrowing the field…</p>';
-    notForSaleSection.hidden = true;
+    const notForSaleGrid = $('#notForSaleGrid');
+    const recommendationSection = $('#recommendationsSection');
+    const refinePanel = $('#refinePanel');
+    const tasteSummary = $('#tasteSummary');
+    const visualSummary = $('#visualInspirationSummary');
+    const learningGuide = $('#learningGuideSection');
+    const refineButton = $('#refineButton');
+    if (resultsHeading) resultsHeading.textContent = 'I’m researching that now.';
+    if (resultsSummary) resultsSummary.textContent = 'Starting a fresh search for your current request.';
+    if (resultsMeta) { resultsMeta.textContent = ''; resultsMeta.hidden = true; }
+    if (grid) grid.innerHTML = '<p class="empty-state">Searching and narrowing the field…</p>';
+    if (notForSaleSection) notForSaleSection.hidden = true;
+    if (notForSaleGrid) notForSaleGrid.innerHTML = '';
+    if (tasteSummary) tasteSummary.hidden = true;
+    if (visualSummary) { visualSummary.hidden = true; visualSummary.innerHTML = ''; }
+    if (learningGuide) learningGuide.hidden = true;
+    if (recommendationSection) recommendationSection.hidden = state.intent === 'learn';
+    if (refinePanel) refinePanel.hidden = state.intent === 'learn';
+    if (refineButton) { refineButton.disabled = true; refineButton.textContent = 'Researching…'; }
 
     let apiPayload = null;
     try {
@@ -785,12 +822,14 @@
       renderResults(data);
       return true;
     } catch (error) {
-      resultsHeading.textContent = 'I couldn’t complete that search.';
-      resultsSummary.textContent = error.message || 'Please try again.';
-      resultsMeta.textContent = '';
-      grid.innerHTML = '<p class="empty-state">Check your connected services, then try the request again.</p>';
+      if (resultsHeading) resultsHeading.textContent = 'I couldn’t complete that search.';
+      if (resultsSummary) resultsSummary.textContent = error.message || 'Please try again.';
+      if (resultsMeta) { resultsMeta.textContent = ''; resultsMeta.hidden = true; }
+      if (grid) grid.innerHTML = '<p class="empty-state">Return to your concierge and try the request again.</p>';
+      if (refineButton) { refineButton.disabled = true; refineButton.textContent = 'Refine'; }
       return false;
     } finally {
+      if (refineButton) { refineButton.disabled = false; refineButton.textContent = 'Refine'; }
       if (apiPayload) apiPayload.inspiration_images = [];
       if (payload && typeof payload === 'object') {
         delete payload.inspiration_images;
@@ -975,19 +1014,12 @@
       $('#artGrid').innerHTML = results.map(renderCard).join('');
       bindArtworkImageFallbacks($('#artGrid'));
     } else {
-      const diagnostic = data.diagnostics || {};
-      const commercialConfigured = (diagnostic.commercial_sources_configured || []).length > 0;
-      let emptyMessage = intent === 'buy'
-        ? (commercialConfigured
-          ? 'I could not find purchase inventory in the connected commercial sources.'
-          : 'No commercial art source is connected yet. Connect an acquisition source to search art available to buy.')
+      const emptyMessage = intent === 'buy'
+        ? 'I could not find artworks currently listed for sale that match this request. Try a different artist, style, medium, or budget.'
         : 'The connected art collections did not return a match with a retrievable image. Try a broader art style, artist, subject, or medium.';
-      const failedSources = (diagnostic.source_diagnostics || [])
-        .filter((source) => source.configured && (source.errors || []).length)
-        .map((source) => `${source.provider} (${source.errors[0]})`);
-      if (failedSources.length) {
-        emptyMessage += ` Sources with connection issues: ${failedSources.join(', ')}.`;
-      }
+      // Provider configuration and HTTP failures stay in /api/diagnostics and
+      // server logs. They are not user-facing copy and must never leak a museum
+      // outage into the Buy experience.
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
@@ -1378,9 +1410,14 @@
     });
   }
   function initResults() {
-    if (state.last) renderResults(state.last);
     const params = new URLSearchParams(window.location.search);
-    if (params.get('run') === '1') runPendingRequest();
+    const isNewRun = params.get('run') === '1';
+    // A new request must never flash or briefly restore the previous search.
+    if (isNewRun) {
+      runPendingRequest();
+    } else if (state.last) {
+      renderResults(state.last);
+    }
     $('#refineButton')?.addEventListener('click', () => {
       const feedback = $('#feedback')?.value.trim();
       if (!feedback || !state.last) return;

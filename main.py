@@ -446,12 +446,27 @@ async def diagnostics() -> dict[str, Any]:
             "model": config.GEMINI_MODEL,
         },
         "commercial_sources": {
-            "artsy": bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID),
-            "artlogic": bool(config.ARTLOGIC_FEED_URL),
-            "collect24": bool(config.COLLECT24_API_KEY),
+            "artsy": {
+                "configured": bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID),
+                "requires": ["ARTSY_XAPP_TOKEN", "ARTSY_PARTNER_ID"],
+            },
+            "artlogic": {
+                "configured": bool(config.ARTLOGIC_FEED_URL),
+                "requires": ["ARTLOGIC_FEED_URL"],
+            },
+            "collect24": {
+                "configured": bool(config.COLLECT24_API_KEY),
+                "requires": ["COLLECT24_API_KEY"],
+            },
+            "purchase_search_ready": bool(
+                (config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)
+                or config.ARTLOGIC_FEED_URL
+                or config.COLLECT24_API_KEY
+            ),
         },
         "stripe": {
             "configured": bool(config.STRIPE_SECRET_KEY),
+            "checkout_catalog_items": len(config.STRIPE_CHECKOUT_CATALOG),
         },
     }
 

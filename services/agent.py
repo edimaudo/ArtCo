@@ -317,10 +317,13 @@ async def _research(
     if not include_extended_sources:
         institutional = [provider for provider in institutional if provider.name != "Rijksmuseum"]
 
-    if request.intent.value == "learn":
+    # Buy is a commerce query, not an institutional collection query. Museum APIs
+    # provide collection metadata and reproductions; they do not provide purchase
+    # inventory. Excluding them also keeps a museum HTTP 403 out of Buy diagnostics.
+    if request.purchase_required or request.intent.value == "buy":
+        provider_groups = [commercial]
+    elif request.intent.value == "learn":
         provider_groups = [institutional, commercial]
-    elif request.purchase_required:
-        provider_groups = [commercial, institutional]
     else:
         provider_groups = [institutional, commercial]
 

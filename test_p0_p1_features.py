@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261017-image-recovery-taste-guard" in response.text
+    assert "/static/js/app.js?v=20261017-buy-source-and-stale-results-guard" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -294,3 +294,51 @@ def test_taste_editor_changes_are_draft_only_and_prompt_before_navigation():
     css = (ROOT / "static/css/style.css").read_text()
     assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
     assert ".taste-editor-lower .discovery-control" in css
+
+
+def test_buy_research_uses_commercial_inventory_only(monkeypatch):
+    calls = []
+
+    class FakeProvider:
+        def __init__(self, name):
+            self.name = name
+
+        async def search(self, query, limit=8):
+            calls.append(self.name)
+            return []
+
+    commercial = [FakeProvider("Artsy"), FakeProvider("Collect24")]
+    institutional = [FakeProvider("The Metropolitan Museum of Art"), FakeProvider("Cleveland Museum of Art")]
+    monkeypatch.setattr(agent, "commercial_providers", lambda: commercial)
+    monkeypatch.setattr(agent, "institutional_providers", lambda: institutional)
+    monkeypatch.setattr(agent, "_provider_configured", lambda _provider: True)
+
+    request = ConciergeRequest(intent="buy", purchase_required=True, goal="Buy an abstract painting", number_of_works=3)
+    works, diagnostics = asyncio.run(agent._research(["abstract painting for sale"], request, []))
+
+    assert works == []
+    assert set(calls) == {"Artsy", "Collect24"}
+    assert "The Metropolitan Museum of Art" not in calls
+    assert all(item["provider"] not in {"The Metropolitan Museum of Art", "Cleveland Museum of Art"} for item in diagnostics)
+
+
+def test_buy_empty_state_does_not_expose_backend_source_errors():
+    js = (ROOT / "static/js/app.js").read_text()
+    assert "No commercial art source is connected yet" not in js
+    assert "Sources with connection issues:" not in js
+    assert "I could not find artworks currently listed for sale that match this request." in js
+
+
+def test_new_results_run_never_restores_cached_previous_search():
+    js = (ROOT / "static/js/app.js").read_text()
+    start = js.index("function initResults()")
+    end = js.index("function initSaved()", start)
+    init = js[start:end]
+    assert "const isNewRun = params.get('run') === '1'" in init
+    assert init.index("if (isNewRun)") < init.index("else if (state.last)")
+    run_start = js.index("async function runPendingRequest()")
+    run_end = js.index("function renderTasteSummary", run_start)
+    run = js[run_start:run_end]
+    assert "if (tasteSummary) tasteSummary.hidden = true" in run
+    assert "if (visualSummary) { visualSummary.hidden = true; visualSummary.innerHTML = ''; }" in run
+    assert "if (notForSaleGrid) notForSaleGrid.innerHTML = ''" in run
