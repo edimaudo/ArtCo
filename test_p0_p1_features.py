@@ -9,7 +9,7 @@ import main
 import services.agent as agent
 import services.payments as payments
 from models.schemas import ConciergeRequest
-from services.art_sources import Artwork
+from services.art_sources import Artwork, _map_artlogic, _map_artsy
 from services.payments import CheckoutSessionNotFound
 
 ROOT = Path(__file__).resolve().parent
@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261017-buy-source-and-stale-results-guard" in response.text
+    assert "/static/js/app.js?v=20261018-buyable-inventory-and-fresh-search" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -326,7 +326,8 @@ def test_buy_empty_state_does_not_expose_backend_source_errors():
     js = (ROOT / "static/js/app.js").read_text()
     assert "No commercial art source is connected yet" not in js
     assert "Sources with connection issues:" not in js
-    assert "I could not find artworks currently listed for sale that match this request." in js
+    assert "No works explicitly listed as available to purchase matched this request." in js
+    assert "ArtCo has no seller inventory connected right now." in js
 
 
 def test_new_results_run_never_restores_cached_previous_search():
@@ -342,3 +343,72 @@ def test_new_results_run_never_restores_cached_previous_search():
     assert "if (tasteSummary) tasteSummary.hidden = true" in run
     assert "if (visualSummary) { visualSummary.hidden = true; visualSummary.innerHTML = ''; }" in run
     assert "if (notForSaleGrid) notForSaleGrid.innerHTML = ''" in run
+
+
+def test_artsy_inquiry_only_items_are_not_purchase_inventory():
+    inquiry_only = _map_artsy({
+        "id": "inquiry-1", "title": "Inquiry only", "can_acquire": "false",
+        "can_inquire": True, "sold": False,
+        "_embedded": {"artists": [{"name": "Gallery Artist"}]},
+        "_links": {"thumbnail": {"href": "https://images.example.org/work.jpg"},
+                   "permalink": {"href": "https://www.artsy.net/artwork/inquiry-1"}},
+    })
+    buyable = _map_artsy({
+        "id": "buyable-1", "title": "Buyable", "can_acquire": True,
+        "can_inquire": False, "sold": False,
+        "_embedded": {"artists": [{"name": "Gallery Artist"}]},
+        "_links": {"thumbnail": {"href": "https://images.example.org/work.jpg"},
+                   "permalink": {"href": "https://www.artsy.net/artwork/buyable-1"}},
+    })
+    assert inquiry_only.availability == "not_for_sale"
+    assert agent._is_purchasable(inquiry_only) is False
+    assert buyable.availability == "available"
+    assert agent._is_purchasable(buyable) is True
+
+
+def test_artlogic_buy_availability_requires_explicit_for_sale_status():
+    from_for_sale = _map_artlogic({"rows": [
+        {"id": "for-sale", "title": "Available", "availability": "for_sale",
+         "image_url": "https://gallery.example.org/available.jpg", "url": "https://gallery.example.org/available"},
+        {"id": "published", "title": "Published but not marked for sale", "status": "published",
+         "image_url": "https://gallery.example.org/published.jpg", "url": "https://gallery.example.org/published"},
+        {"id": "reserved", "title": "Reserved", "availability": "available", "reserved": True,
+         "image_url": "https://gallery.example.org/reserved.jpg", "url": "https://gallery.example.org/reserved"},
+        {"id": "sold-conflict", "title": "Sold", "availability": "for_sale", "status": "sold",
+         "image_url": "https://gallery.example.org/sold.jpg", "url": "https://gallery.example.org/sold"},
+    ]})
+    assert {work.id: work.availability for work in from_for_sale} == {
+        "artlogic:for-sale": "available",
+        "artlogic:published": "not_for_sale",
+        "artlogic:reserved": "not_for_sale",
+        "artlogic:sold-conflict": "not_for_sale",
+    }
+
+
+def test_buy_api_and_ui_never_pad_with_non_purchasable_works():
+    agent_source = (ROOT / "services/agent.py").read_text()
+    js = (ROOT / "static/js/app.js").read_text()
+    assert '"not_for_sale": [] if buy_intent' in agent_source
+    assert "work.source_kind === 'commercial' && work.availability === 'available'" in js
+    assert "const notForSale = [];" in js
+    assert "museum collection records are not shown here" in js
+
+
+def test_fresh_search_invalidates_old_state_and_refreshes_bfcache_handoff():
+    js = (ROOT / "static/js/app.js").read_text()
+    assert "function resultsRunUrl(intent, fromConcierge = false)" in js
+    assert "run_id: runId" in js
+    assert "state.searchRunActive = true;" in js
+    assert "state.last = null;" in js
+    assert "if (state.searchRunActive) return;" in js
+    assert "window.addEventListener('pageshow', (event) =>" in js
+    assert "if (sessionStorage.getItem('artConciergePendingRequest'))" in js
+
+
+def test_taste_lower_fields_have_shared_label_height_and_top_alignment():
+    css = (ROOT / "static/css/style.css").read_text()
+    assert ".taste-editor-lower {" in css
+    lower = css[css.index(".taste-editor-lower {"):css.index(".taste-editor-lower textarea")]
+    assert "align-items: start;" in lower
+    assert "height: 2.8rem;" in lower
+    assert "min-height: 2.8rem;" in lower

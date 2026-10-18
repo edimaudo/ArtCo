@@ -11,6 +11,7 @@
     preferences: { theme: 'light', fontScale: 'md' },
     intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
     inspiration: { images: [], preparing: false },
+    searchRunActive: false,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -645,6 +646,15 @@
     };
   }
 
+  function resultsRunUrl(intent, fromConcierge = false) {
+    const runId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const params = new URLSearchParams({ intent: intent || 'discover', run: '1', run_id: runId });
+    if (fromConcierge) params.set('from', 'concierge');
+    return `/results?${params.toString()}`;
+  }
+
   async function beginRequest(prompt) {
     const clean = String(prompt || '').trim();
     if (!clean && state.inspiration.images.length === 0) {
@@ -673,7 +683,7 @@
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
       // Images live only long enough to cross the same-tab page navigation.
       clearCurrentInspirationImages();
-      window.location.assign(`/results?from=concierge&intent=${encodeURIComponent(inferred)}&run=1`);
+      window.location.assign(resultsRunUrl(inferred, true));
     } catch (error) {
       const status = $('#inspirationMessage');
       if (status) status.textContent = error?.name === 'QuotaExceededError'
@@ -704,7 +714,7 @@
     if (button) { button.disabled = true; button.textContent = 'Searching alternatives…'; }
     try {
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
-      window.location.assign('/results?intent=discover&run=1');
+      window.location.assign(resultsRunUrl('discover'));
     } catch (error) {
       if (button) { button.disabled = false; button.textContent = 'Not for me'; }
       const message = $('#resultsSummary');
@@ -733,7 +743,7 @@
       if (count) count.textContent = 'Could not start the search in this browser tab. Please allow session storage and try again.';
       return;
     }
-    window.location.assign('/results?intent=discover&run=1');
+    window.location.assign(resultsRunUrl('discover'));
   }
 
   async function runPendingRequest() {
@@ -767,8 +777,11 @@
     // retained in sessionStorage, the current result object, or recent-search history.
     sessionStorage.removeItem('artConciergePendingRequest');
 
-    // Clear all previous-search output before this new request can paint. Do not
-    // render state.last while ?run=1 is active; it belongs to the prior search.
+    // Invalidate the previously persisted result for this page instance before
+    // any asynchronous request starts. This prevents delayed UI events, BFCache
+    // restores, or save actions from repainting the prior search mid-transition.
+    state.searchRunActive = true;
+    state.last = null;
     state.intent = payload.intent || state.intent;
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
@@ -817,11 +830,14 @@
       delete historyRequest.inspiration_images;
       delete historyRequest.inspiration_image_ids;
       data.request = historyRequest;
+      state.searchRunActive = false;
       saveLastResult(data);
       saveRecent(historyRequest, data);
       renderResults(data);
       return true;
     } catch (error) {
+      state.searchRunActive = false;
+      state.last = null;
       if (resultsHeading) resultsHeading.textContent = 'I couldn’t complete that search.';
       if (resultsSummary) resultsSummary.textContent = error.message || 'Please try again.';
       if (resultsMeta) { resultsMeta.textContent = ''; resultsMeta.hidden = true; }
@@ -829,6 +845,7 @@
       if (refineButton) { refineButton.disabled = true; refineButton.textContent = 'Refine'; }
       return false;
     } finally {
+      state.searchRunActive = false;
       if (refineButton) { refineButton.disabled = false; refineButton.textContent = 'Refine'; }
       if (apiPayload) apiPayload.inspiration_images = [];
       if (payload && typeof payload === 'object') {
@@ -982,6 +999,8 @@
   }
 
   function renderResults(data) {
+    // Ignore stale render attempts while a fresh request owns the Results view.
+    if (state.searchRunActive) return;
     const intent = data.intent || state.intent;
     const labels = {
       discover: 'Works worth a closer look.',
@@ -1000,11 +1019,11 @@
     if (refinePanel) refinePanel.hidden = learningOnly;
     const resultsMeta = $('#resultsMeta');
     if (resultsMeta) resultsMeta.hidden = learningOnly;
-    const available = data.purchase_available || 0;
-    const results = (data.results || []).slice(0, 3);
-    const notForSale = intent === 'buy'
-      ? (data.not_for_sale || []).slice(0, Math.max(0, 3 - results.length))
-      : [];
+    // In Buy, even a malformed/older API response must not reintroduce museum,
+    // inquiry-only, withdrawn, or otherwise non-purchasable works.
+    const results = (data.results || []).filter((work) => intent !== 'buy'
+      || (work.source_kind === 'commercial' && work.availability === 'available')).slice(0, 3);
+    const notForSale = [];
     const visibleCount = results.length + notForSale.length;
     const visiblePurchasable = results.filter((work) => work.availability === 'available' && work.source_kind === 'commercial').length;
     $('#resultsMeta').textContent = intent === 'buy'
@@ -1014,8 +1033,11 @@
       $('#artGrid').innerHTML = results.map(renderCard).join('');
       bindArtworkImageFallbacks($('#artGrid'));
     } else {
+      const configuredSellers = data.diagnostics?.commercial_sources_configured || [];
       const emptyMessage = intent === 'buy'
-        ? 'I could not find artworks currently listed for sale that match this request. Try a different artist, style, medium, or budget.'
+        ? (configuredSellers.length
+          ? 'No works explicitly listed as available to purchase matched this request. Try a different artist, style, medium, location, or budget.'
+          : 'ArtCo has no seller inventory connected right now. Buy searches only show works explicitly listed as available to purchase by a connected seller; museum collection records are not shown here.')
         : 'The connected art collections did not return a match with a retrievable image. Try a broader art style, artist, subject, or medium.';
       // Provider configuration and HTTP failures stay in /api/diagnostics and
       // server logs. They are not user-facing copy and must never leak a museum
@@ -1023,7 +1045,7 @@
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
-    $('#notForSaleSection').hidden = !notForSale.length;
+    $('#notForSaleSection').hidden = intent === 'buy' || !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');
       bindArtworkImageFallbacks($('#notForSaleGrid'));
@@ -1414,6 +1436,7 @@
     const isNewRun = params.get('run') === '1';
     // A new request must never flash or briefly restore the previous search.
     if (isNewRun) {
+      state.last = null;
       runPendingRequest();
     } else if (state.last) {
       renderResults(state.last);
@@ -1423,7 +1446,7 @@
       if (!feedback || !state.last) return;
       const base = { ...(state.last.request || buildRequest(state.last.summary || '', null, state.last.intent || 'discover')), feedback };
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(base));
-      window.location.href = `/results?intent=${encodeURIComponent(base.intent)}&run=1`;
+      window.location.href = resultsRunUrl(base.intent);
     });
     $('#feedback')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -1563,6 +1586,19 @@
     window.location.href = '/dashboard#taste';
   }
 
+
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    const params = new URLSearchParams(window.location.search);
+    if (window.ART_CONCIERGE_PAGE !== 'results' || params.get('run') !== '1') return;
+    // If navigation restored a cached Results document while a newer Concierge
+    // request is waiting in session storage, rerun that request instead of
+    // leaving the restored document's old result cards on screen.
+    if (sessionStorage.getItem('artConciergePendingRequest')) {
+      state.last = null;
+      runPendingRequest();
+    }
+  });
 
   async function initializeArtCo() {
     await hydrateAppState();

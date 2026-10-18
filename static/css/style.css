@@ -696,10 +696,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 44px;
-  align-items: stretch;
+  align-items: start;
 }
-.taste-editor-lower > div { min-width: 0; display: flex; flex-direction: column; }
-.taste-editor-lower .field-label { min-height: 2.8rem; display: flex; align-items: flex-start; }
+.taste-editor-lower > div { min-width: 0; display: flex; flex-direction: column; align-items: stretch; }
+.taste-editor-lower .field-label {
+  box-sizing: border-box;
+  height: 2.8rem;
+  min-height: 2.8rem;
+  margin: 0 0 .35rem;
+  display: flex;
+  align-items: flex-start;
+  line-height: 1.35;
+}
 .taste-editor-lower textarea {
   width: 100%;
   min-height: 240px;
@@ -715,7 +723,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   flex-direction: column;
   align-items: stretch;
 }
-.taste-editor-lower .discovery-copy { min-height: 4.8em; }
+.taste-editor-lower .discovery-copy { min-height: 4.8em; margin-top: 0; }
 .taste-editor-lower .range-line { margin-top: auto; margin-bottom: auto; }
 .taste-editor-lower #tasteUpdated { margin-top: auto; }
 .taste-editor-grid .taste-help {

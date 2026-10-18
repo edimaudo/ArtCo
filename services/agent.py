@@ -261,6 +261,11 @@ def _has_image_candidate(work: Artwork) -> bool:
     return _usable_image_url(work.image_url)
 
 
+def _is_purchasable(work: Artwork) -> bool:
+    """Only explicitly available commercial inventory belongs in Buy results."""
+    return work.source_kind == "commercial" and work.availability == "available"
+
+
 def _provider_configured(provider: Any) -> bool:
     if provider.name == "Artsy":
         return bool(config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID)
@@ -481,7 +486,7 @@ def _select(
         # Curate prefers artist variety; other intents can return more than one work.
         if request.intent.value == "curate" and artist_key and artist_key in seen_artists and len(selected) < target:
             continue
-        if request.purchase_required and not (work.source_kind == "commercial" and work.availability == "available"):
+        if (request.purchase_required or request.intent.value == "buy") and not _is_purchasable(work):
             continue
         selected.append(work)
         if artist_key:
@@ -1122,22 +1127,22 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     review = None
     selected = _select(works, request, qloo_artists, review, cultural_art_directions)
     review_data = _review_map(review)
-    purchasable = [
-        work for work in works
-        if work.source_kind == "commercial" and work.availability == "available"
-    ]
-    not_for_sale = [work for work in works if not (work.source_kind == "commercial" and work.availability == "available")]
+    buy_intent = request.purchase_required or request.intent.value == "buy"
+    purchasable = [work for work in works if _is_purchasable(work)]
+    # Buy is never padded with institutional records, inquiry-only listings,
+    # withdrawn works, or any other result that cannot be purchased.
+    not_for_sale = [] if buy_intent else [work for work in works if not _is_purchasable(work)]
 
-    if request.purchase_required:
-        primary = [work for work in selected if work.source_kind == "commercial" and work.availability == "available"][: min(max(1, request.number_of_works), 3)]
+    if buy_intent:
+        primary = [work for work in selected if _is_purchasable(work)][: min(max(1, request.number_of_works), 3)]
     elif request.intent.value == "curate":
         primary = selected[: min(max(1, request.number_of_works), 3)]
     else:
         primary = selected[:3]
     primary_ids = {work.id for work in primary}
-    # Three is the total visible shortlist across both sections. Only Buy uses
-    # the secondary section to fill gaps when fewer than three works can be bought.
-    secondary_limit = max(0, 3 - len(primary)) if request.intent.value == "buy" else 0
+    # Non-purchase flows may show related institutional works in a secondary
+    # section. Buy never fills gaps with works that are not actually for sale.
+    secondary_limit = 0
     secondary = [work for work in not_for_sale if work.id not in primary_ids][:secondary_limit]
 
     intent_summary = {
@@ -1145,7 +1150,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "find": "I translated your request into a focused search, then compared the resulting works against the brief.",
         "taste": "I started from your references and explored related artists and works to help you understand what you respond to.",
         "curate": "I looked for works that fit your brief individually and make sense together as a group.",
-        "buy": "I prioritised commercial works marked as available to acquire. Additional works that are not for sale are shown separately when useful.",
+        "buy": "I searched connected sellers for works explicitly listed as available to purchase. Only buyable listings are shown.",
         "learn": "I searched the requested artistic territory and selected works that help put the subject into context.",
     }[request.intent.value]
     if visual_analysis:
@@ -1174,6 +1179,11 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
                     ("Collect24", bool(config.COLLECT24_API_KEY)),
                 ] if configured
             ],
+            "commercial_source_count": sum(bool(value) for value in [
+                config.ARTSY_XAPP_TOKEN and config.ARTSY_PARTNER_ID,
+                config.ARTLOGIC_FEED_URL,
+                config.COLLECT24_API_KEY,
+            ]),
             "purchase_inventory_found": len(purchasable),
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
             "image_bearing_works_found": len(works),
@@ -1231,7 +1241,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "search_directions_used": list(dict.fromkeys(item.get("label", "") for item in status if item.get("label"))),
         "critique": review_data.get("critique", ""),
         "results": [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in primary],
-        "not_for_sale": [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in secondary],
+        "not_for_sale": [] if buy_intent else [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in secondary],
         "purchase_available": len(purchasable),
         "commercial_found": sum(work.source_kind == "commercial" for work in works),
         "institutional_found": sum(work.source_kind == "institution" for work in works),

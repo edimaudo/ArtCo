@@ -359,12 +359,20 @@ class Collect24Provider:
         )
 
 
+def _flag_is_true(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 def _map_artsy(item: dict[str, Any]) -> Artwork:
     artists = item.get("_embedded", {}).get("artists") or []
     artist = artists[0].get("name") if artists else "Unknown artist"
-    can_acquire = bool(item.get("can_acquire"))
-    can_inquire = bool(item.get("can_inquire"))
-    availability = "available" if (can_acquire or can_inquire) and not item.get("sold") else "not_for_sale"
+    # Buy must only surface works the marketplace explicitly marks as
+    # purchasable. Inquiry-only listings are not purchase inventory.
+    can_acquire = _flag_is_true(item.get("can_acquire"))
+    sold = _flag_is_true(item.get("sold"))
+    availability = "available" if can_acquire and not sold else "not_for_sale"
     price = None
     price_data = item.get("price") or item.get("list_price")
     if isinstance(price_data, (int, float)):
@@ -422,8 +430,26 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        available = str(row.get("status") or row.get("availability") or "").lower()
-        sold = "sold" in available
+        raw_status = row.get("availability") or row.get("sale_status") or row.get("status") or ""
+        available = str(raw_status).strip().casefold().replace("-", "_")
+        # A general gallery-feed status such as "published" or "active" does
+        # not prove that a work is currently for sale. Accept only explicit
+        # sale-availability values and honour explicit sold/reserved flags.
+        availability_values = {
+            "available", "for sale", "for_sale", "in stock", "in_stock",
+            "available for purchase", "available_for_purchase",
+            "available to purchase", "available_to_purchase",
+        }
+        status_value = str(row.get("status") or "").strip().casefold().replace("-", "_")
+        sold_values = {"sold", "reserved", "unavailable", "not_for_sale", "not for sale", "withdrawn", "archived"}
+        sold = (
+            _flag_is_true(row.get("sold"))
+            or _flag_is_true(row.get("is_sold"))
+            or _flag_is_true(row.get("reserved"))
+            or available in sold_values
+            or status_value in sold_values
+        )
+        is_available = available in availability_values and not sold
         price = row.get("retail_price") or row.get("price")
         try:
             price_value = float(price) if price not in (None, "") else None
@@ -441,7 +467,7 @@ def _map_artlogic(payload: Any) -> list[Artwork]:
                 detail_url=row.get("url") or row.get("permalink"),
                 source="Artlogic",
                 source_kind="commercial",
-                availability="not_for_sale" if sold else "available",
+                availability="available" if is_available else "not_for_sale",
                 price=price_value,
                 currency=row.get("retail_currency") or row.get("currency"),
                 medium=row.get("medium") or row.get("artwork_type"),

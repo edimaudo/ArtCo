@@ -102,11 +102,13 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     css = (root / "static/css/style.css").read_text()
     agent = (root / "services/agent.py").read_text()
     concierge = (root / "templates/concierge.html").read_text()
-    assert "(data.results || []).slice(0, 3)" in js
-    assert "Math.max(0, 3 - results.length)" in js
+    assert "(data.results || []).filter((work) => intent !== 'buy'" in js
+    assert ".slice(0, 3)" in js
+    assert "const notForSale = [];" in js
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css
     assert "primary = selected[:3]" in agent
-    assert 'secondary_limit = max(0, 3 - len(primary)) if request.intent.value == "buy" else 0' in agent
+    assert "secondary_limit = 0" in agent
+    assert '"not_for_sale": [] if buy_intent' in agent
     assert "width: min(100%, 185px)" in css
     assert "Images are stored in this browser" not in concierge
     assert "Optional · Up to 5 per request" not in concierge
@@ -218,8 +220,8 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
 def test_static_assets_are_versioned_to_avoid_stale_result_caps():
     from pathlib import Path
     html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
-    assert "/static/js/app.js?v=20261017-buy-source-and-stale-results-guard" in html
-    assert "/static/css/style.css?v=20261017-buy-source-and-stale-results-guard" in html
+    assert "/static/js/app.js?v=20261018-buyable-inventory-and-fresh-search" in html
+    assert "/static/css/style.css?v=20261018-buyable-inventory-and-fresh-search" in html
 
 
 def test_artlogic_cloudfront_cdn_is_proxyable():
@@ -262,7 +264,7 @@ def test_saved_more_like_action_starts_a_new_request():
     js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
     assert "function beginSimilarSearch(artwork)" in js
     assert "window.ART_CONCIERGE_PAGE === 'saved' && /^More like/i.test(text)" in js
-    assert "window.location.assign('/results?intent=discover&run=1')" in js
+    assert "window.location.assign(resultsRunUrl('discover'))" in js
     assert "request.inspiration_image_ids = []" in js
 
 

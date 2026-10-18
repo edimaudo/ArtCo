@@ -87,13 +87,14 @@ async def main():
         assert all(item["source_kind"] == "commercial" and item["availability"] == "available" for item in result["results"])
         assert calls["plan"], "Qloo associations should be translated into optional art-catalogue directions"
         assert result["diagnostics"]["cultural_art_directions_used"] > 0
-        assert result["not_for_sale"]
-        assert all(item["image_url"] for item in result["results"] + result["not_for_sale"])
+        assert result["not_for_sale"] == []
+        assert all(item["source_kind"] == "commercial" and item["availability"] == "available" for item in result["results"])
+        assert all(item["image_url"] for item in result["results"])
         print("agent smoke: PASS")
         print(f"qloo searches: {calls['qloo_search']}")
         print(f"translated cultural directions: {result['diagnostics']['cultural_art_directions_used']}")
         print(f"primary results: {[item['id'] for item in result['results']]}")
-        print(f"not-for-sale: {[item['id'] for item in result['not_for_sale']]}")
+        print("not-for-sale padding: none")
     finally:
         for name, value in original.items():
             setattr(agent, name, value)
