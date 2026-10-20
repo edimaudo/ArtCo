@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261019-purchasable-taste-references" in response.text
+    assert "/static/js/app.js?v=20261020-simplified-explore-personalization" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -202,7 +202,7 @@ def test_purchase_history_is_integrated_with_checkout_and_dashboard():
     assert dashboard.index('id="tasteTab"') < dashboard.index('id="purchasesTab"')
 
 
-def test_all_six_concierge_intents_have_distinct_ranking_or_selection_rules():
+def test_concierge_intents_keep_distinct_ranking_or_selection_rules():
     geometric = artwork("geometric", "Geometric Study", "Aligned Artist", medium="geometric abstract sculpture", description="geometric forms")
     quiet = artwork("quiet", "Quiet Landscape", "Other Artist", medium="oil landscape", description="quiet landscape")
 
@@ -329,7 +329,7 @@ def test_buy_empty_state_does_not_expose_backend_source_errors():
     assert "Sources with connection issues:" not in js
     assert "No works explicitly listed as available to purchase matched this request." in js
     assert "No commercial seller inventory is connected right now." in js
-    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);" in js
+    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent) || usesSavedTaste;" in js
 
 
 def test_new_results_run_never_restores_cached_previous_search():
@@ -419,14 +419,16 @@ def test_develop_my_taste_uses_saved_work_notes_and_previous_ideas():
     assert with_references > without_references
 
 
-def test_frontend_sends_saved_artworks_and_ideas_only_for_taste_and_filters_museum_results():
+def test_frontend_sends_saved_artworks_and_ideas_only_when_personalization_is_enabled():
     js = (ROOT / "static/js/app.js").read_text()
-    assert "existing_artworks: inferred === 'taste'" in js
-    assert "existing_ideas: inferred === 'taste'" in js
-    assert "profile_notes: inferred === 'taste'" in js
+    html = (ROOT / "templates/concierge.html").read_text()
+    assert "personalize_with_saved_taste: useSavedTaste" in js
+    assert "existing_artworks: useSavedTaste" in js
+    assert "existing_ideas: useSavedTaste" in js
+    assert "profile_notes: useSavedTaste" in js
     assert "state.saved.slice(0, 6).map((work) => ({" in js
-    assert "Build on your saved artworks, taste profile, and earlier ideas" in js
-    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);" in js
+    assert "Use my saved taste" in html
+    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent) || usesSavedTaste;" in js
 
 
 def test_buy_api_and_ui_never_pad_with_non_purchasable_works():
@@ -440,7 +442,7 @@ def test_buy_api_and_ui_never_pad_with_non_purchasable_works():
 
 def test_fresh_search_invalidates_old_state_and_refreshes_bfcache_handoff():
     js = (ROOT / "static/js/app.js").read_text()
-    assert "function resultsRunUrl(intent, fromConcierge = false)" in js
+    assert "function resultsRunUrl(intent, fromConcierge = false, personalizeWithSavedTaste = state.personalizeExplore)" in js
     assert "run_id: runId" in js
     assert "state.searchRunActive = true;" in js
     assert "state.last = null;" in js
@@ -456,3 +458,46 @@ def test_taste_lower_fields_have_shared_label_height_and_top_alignment():
     assert "align-items: start;" in lower
     assert "height: 2.8rem;" in lower
     assert "min-height: 2.8rem;" in lower
+
+
+def test_concierge_exposes_five_clear_modes_and_moves_taste_to_explore_toggle():
+    html = (ROOT / "templates/concierge.html").read_text()
+    home = (ROOT / "templates/index.html").read_text()
+    assert '<option value="discover">Explore art</option>' in html
+    assert '<option value="find">Find art</option>' in html
+    assert '<option value="curate">Curate a collection</option>' in html
+    assert '<option value="buy">Buy art</option>' in html
+    assert '<option value="learn">Learn about art</option>' in html
+    assert '<option value="taste">' not in html
+    assert 'id="personalizeExplore"' in html
+    assert 'Develop my taste</strong>' not in home
+    assert home.count('class="service-card"') == 5
+
+
+def test_personalized_explore_uses_saved_references_and_enforces_purchase_only():
+    from models.schemas import ExistingArtworkReference
+    request = ConciergeRequest(
+        intent="discover",
+        personalize_with_saved_taste=True,
+        goal="Explore art like my saved geometric pieces",
+        profile_notes="Bold geometry and rust orange",
+        existing_ideas=["Art that feels like punk music"],
+        existing_artworks=[ExistingArtworkReference(title="Geometric Study", artist="Mara Example", medium="mixed media")],
+    )
+    assert request.purchase_required is True
+    assert agent._uses_saved_taste(request)
+    assert agent._requires_purchasable_inventory(request)
+    directions = agent._taste_reference_directions(request)
+    assert "Bold geometry and rust orange" in directions
+    assert "Art that feels like punk music" in directions
+    assert "Geometric Study Mara Example mixed media" in directions
+    buyable = artwork("buyable", "Geometric Study No. 2", "Mara Example", source_kind="commercial", availability="available")
+    museum = artwork("museum", "Geometric Study No. 3", "Museum Artist", source_kind="institution", availability="not_for_sale")
+    assert [w.id for w in agent._select([buyable, museum], request, [], None)] == ["buyable"]
+
+
+def test_legacy_taste_intent_is_supported_as_personalized_explore_compatibility():
+    request = ConciergeRequest(intent="taste", goal="Build on my saved work")
+    assert request.intent.value == "taste"
+    assert agent._uses_saved_taste(request)
+    assert agent._requires_purchasable_inventory(request)

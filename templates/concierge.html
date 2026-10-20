@@ -15,13 +15,18 @@
       <div class="concierge-service-control">
         <label class="sr-only" for="serviceSelect">Choose a service</label>
         <select id="serviceSelect" aria-label="Choose a service">
-          <option value="discover">Discover</option>
-          <option value="find">Find</option>
-          <option value="taste">Develop my taste</option>
-          <option value="curate">Curate</option>
-          <option value="buy">Buy</option>
+          <option value="discover">Explore art</option>
+          <option value="find">Find art</option>
+          <option value="curate">Curate a collection</option>
+          <option value="buy">Buy art</option>
           <option value="learn">Learn about art</option>
         </select>
+        <div class="explore-personalization" id="personalizationControl" hidden>
+          <label for="personalizeExplore" class="explore-personalization-label">
+            <input id="personalizeExplore" type="checkbox">
+            <span><strong>Use my saved taste</strong><small>Build on your saved artworks, taste profile, and earlier ideas. Recommendations will be limited to works explicitly available to acquire.</small></span>
+          </label>
+        </div>
       </div>
 
       <form id="requestForm" class="request-composer">

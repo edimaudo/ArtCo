@@ -102,7 +102,7 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     css = (root / "static/css/style.css").read_text()
     agent = (root / "services/agent.py").read_text()
     concierge = (root / "templates/concierge.html").read_text()
-    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);" in js
+    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent) || usesSavedTaste;" in js
     assert "work.source_kind === 'commercial' && work.availability === 'available'" in js
     assert ".slice(0, 3)" in js
     assert "const notForSale = [];" in js
@@ -110,7 +110,7 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     assert "primary = selected[:3]" in agent
     assert "secondary_limit = 0" in agent
     assert '"not_for_sale": [] if purchase_only_intent' in agent
-    assert "width: min(100%, 185px)" in css
+    assert "width: min(100%, 280px)" in css
     assert "Images are stored in this browser" not in concierge
     assert "Optional · Up to 5 per request" not in concierge
     assert 'referrerpolicy="no-referrer"' not in js
@@ -221,8 +221,8 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
 def test_static_assets_are_versioned_to_avoid_stale_result_caps():
     from pathlib import Path
     html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
-    assert "/static/js/app.js?v=20261019-purchasable-taste-references" in html
-    assert "/static/css/style.css?v=20261019-purchasable-taste-references" in html
+    assert "/static/js/app.js?v=20261020-simplified-explore-personalization" in html
+    assert "/static/css/style.css?v=20261020-simplified-explore-personalization" in html
 
 
 def test_artlogic_cloudfront_cdn_is_proxyable():

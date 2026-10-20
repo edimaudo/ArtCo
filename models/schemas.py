@@ -55,8 +55,9 @@ class ConciergeRequest(BaseModel):
     loves: list[str] = Field(default_factory=list, max_length=12)
     avoid_references: list[str] = Field(default_factory=list, max_length=12)
     additional_interests: list[str] = Field(default_factory=list, max_length=8)
-    # These references are sent only with taste-development requests. They are
-    # metadata, not owned/purchased inventory claims or persistent uploads.
+    # Personalised Explore requests use saved artwork/profile context and are
+    # restricted to commercial listings explicitly available to acquire.
+    personalize_with_saved_taste: bool = False
     profile_notes: str | None = Field(default=None, max_length=1000)
     existing_ideas: list[str] = Field(default_factory=list, max_length=6)
     existing_artworks: list[ExistingArtworkReference] = Field(default_factory=list, max_length=6)
@@ -85,7 +86,7 @@ class ConciergeRequest(BaseModel):
     def validate_request(self) -> "ConciergeRequest":
         if self.budget_min is not None and self.budget_max is not None and self.budget_min > self.budget_max:
             raise ValueError("budget_min must be less than or equal to budget_max")
-        if self.intent is Intent.buy:
+        if self.intent is Intent.buy or self.personalize_with_saved_taste:
             self.purchase_required = True
         image_ids = [item.image_id for item in self.inspiration_images]
         if len(image_ids) != len(set(image_ids)):

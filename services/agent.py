@@ -99,7 +99,7 @@ async def _build_search_plan(
     status.append(progress)
     try:
         plan = await plan_art_searches(
-            request.intent.value,
+            ("taste" if _uses_saved_taste(request) else request.intent.value),
             request.goal or "",
             signals.cultural_references,
             list(dict.fromkeys([*request.art_interests, *signals.art_interests, *_taste_reference_directions(request)])),
@@ -129,7 +129,7 @@ async def _build_search_plan(
         "taste": ["artworks for sale related to your saved taste", "contemporary art available to buy", "abstract art for sale"],
         "learn": ["art history", "modern art", "contemporary art"],
     }
-    fallbacks = fallback_by_intent.get(
+    fallbacks = fallback_by_intent["taste"] if _uses_saved_taste(request) else fallback_by_intent.get(
         request.intent.value,
         ["contemporary art", "modern painting", "contemporary photography"],
     )
@@ -184,6 +184,11 @@ def _tokenize(text: str | None) -> set[str]:
     return {token for token in tokens if len(token) >= 3 and token not in _TOKEN_STOP_WORDS}
 
 
+def _uses_saved_taste(request: ConciergeRequest) -> bool:
+    """Support the new personalised Explore option and legacy taste requests."""
+    return bool(request.personalize_with_saved_taste or request.intent.value == "taste")
+
+
 def _deterministic_score(
     work: Artwork,
     request: ConciergeRequest,
@@ -215,7 +220,7 @@ def _deterministic_score(
     bridge_terms = set().union(*(_tokenize(value) for value in (cultural_art_directions or []))) if cultural_art_directions else set()
     bridge_matches = sum(1 for token in bridge_terms if token in metadata_haystack)
     score += min(12, bridge_matches * 2)
-    if request.intent.value == "taste":
+    if _uses_saved_taste(request):
         reference_text: list[str] = [request.profile_notes or "", *request.existing_ideas]
         for reference in request.existing_artworks:
             reference_text.extend([reference.title, reference.artist, reference.medium, reference.description])
@@ -241,7 +246,7 @@ def _deterministic_score(
         score += 7
     if request.intent.value == "find":
         score += min(10, len(goal_matches) * 2)
-    elif request.intent.value == "taste":
+    elif _uses_saved_taste(request):
         score += 4 if qloo_names else 0
     elif request.intent.value == "curate":
         score += 3 if work.medium else 0
@@ -275,12 +280,12 @@ def _is_purchasable(work: Artwork) -> bool:
 
 def _requires_purchasable_inventory(request: ConciergeRequest) -> bool:
     """These services must return seller inventory, never institutional collection works."""
-    return bool(request.purchase_required or request.intent.value in {"curate", "taste", "buy"})
+    return bool(request.purchase_required or request.personalize_with_saved_taste or request.intent.value in {"curate", "taste", "buy"})
 
 
 def _taste_reference_directions(request: ConciergeRequest) -> list[str]:
     """Build search phrases from the user's own saved works, notes, and earlier ideas."""
-    if request.intent.value != "taste":
+    if not _uses_saved_taste(request):
         return []
     directions: list[str] = []
     notes = (request.profile_notes or "").strip()
@@ -353,7 +358,7 @@ async def _research(
     if not include_extended_sources:
         institutional = [provider for provider in institutional if provider.name != "Rijksmuseum"]
 
-    # Curate, Develop my taste, and Buy are purchase-oriented recommendations.
+    # Curate, personalised Explore, and Buy are purchase-oriented recommendations.
     # Institutional APIs are excluded so museum collection records cannot appear
     # as items the user could acquire.
     if _requires_purchasable_inventory(request):
@@ -369,7 +374,9 @@ async def _research(
         "taste": ["art for sale inspired by your taste", "contemporary painting available to buy"],
         "learn": ["modern art", "art history"],
     }
-    fallback = fallback_by_intent.get(request.intent.value, ["contemporary art", "modern painting", "contemporary photography"])
+    fallback = fallback_by_intent["taste"] if _uses_saved_taste(request) else fallback_by_intent.get(
+        request.intent.value, ["contemporary art", "modern painting", "contemporary photography"]
+    )
     proposed = list(dict.fromkeys([
         *[item for item in directions if isinstance(item, str) and item.strip()][:4],
         *request.art_interests[:2],
@@ -562,10 +569,13 @@ def _fast_search_directions(request: ConciergeRequest) -> list[str]:
         "taste": ["contemporary painting", "abstract art"],
         "learn": ["modern art", "art history"],
     }
-    fallback = fallback_by_intent.get(
-        request.intent.value,
-        ["contemporary art", "modern painting", "contemporary photography"],
-    )
+    if _uses_saved_taste(request):
+        fallback = fallback_by_intent["taste"]
+    else:
+        fallback = fallback_by_intent.get(
+            request.intent.value,
+            ["contemporary art", "modern painting", "contemporary photography"],
+        )
     explicit = [
         _searchable_goal(request),
         *request.art_interests[:2],
@@ -837,7 +847,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         *request.art_interests,
         *taste_reference_directions,
     ]))[:16]
-    if request.profile_notes and request.intent.value == "taste":
+    if request.profile_notes and _uses_saved_taste(request):
         signal_interests = list(dict.fromkeys([*signal_interests, request.profile_notes.strip()[:180]]))[:16]
     signals_task = asyncio.create_task(extract_request_signals(
         request.goal or "",
@@ -904,9 +914,9 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             early_signals = fallback_signals
     fast_text_directions = _fast_search_directions(request)
     search_goal = _searchable_goal(request)
-    # For taste development, reserve catalogue queries for saved works and ideas
+    # For personalised Explore, reserve catalogue queries for saved works and ideas
     # before generic fallbacks so the recommendations actually build on them.
-    if request.intent.value == "taste":
+    if _uses_saved_taste(request):
         text_directions = list(dict.fromkeys([
             search_goal,
             *taste_reference_directions[:2],
@@ -1210,6 +1220,8 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "buy": "I searched connected sellers for works explicitly listed as available to purchase. Only buyable listings are shown.",
         "learn": "I searched the requested artistic territory and selected works that help put the subject into context.",
     }[request.intent.value]
+    if _uses_saved_taste(request) and request.intent.value == "discover":
+        intent_summary = "I used your saved artworks, taste notes, and earlier ideas to guide an exploration of related works explicitly available to acquire."
     if visual_analysis:
         visual_message = (
             "These visual characteristics informed a separate artwork search and the relevance ranking."
@@ -1243,9 +1255,10 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             ]),
             "purchase_inventory_found": len(purchasable),
             "purchase_only_intent": purchase_only_intent,
-            "taste_reference_artworks_used": len(request.existing_artworks) if request.intent.value == "taste" else 0,
-            "taste_reference_ideas_used": len(request.existing_ideas) if request.intent.value == "taste" else 0,
-            "taste_profile_notes_used": bool(request.profile_notes and request.intent.value == "taste"),
+            "taste_personalization_enabled": _uses_saved_taste(request),
+            "taste_reference_artworks_used": len(request.existing_artworks) if _uses_saved_taste(request) else 0,
+            "taste_reference_ideas_used": len(request.existing_ideas) if _uses_saved_taste(request) else 0,
+            "taste_profile_notes_used": bool(request.profile_notes and _uses_saved_taste(request)),
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
             "image_bearing_works_found": len(works),
             "source_diagnostics": source_diagnostics,
@@ -1290,10 +1303,11 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "budget_max": request.budget_max,
             "number_of_works": min(max(1, request.number_of_works), 8),
             "discovery_level": request.discovery_level,
+            "personalize_with_saved_taste": _uses_saved_taste(request),
         },
         "taste": {
-            "inputs": list(dict.fromkeys(request.loves + signals.cultural_references + request.additional_interests + (request.existing_ideas if request.intent.value == "taste" else [])))[:12],
-            "reference_artworks": [item.model_dump() for item in request.existing_artworks[:6]] if request.intent.value == "taste" else [],
+            "inputs": list(dict.fromkeys(request.loves + signals.cultural_references + request.additional_interests + (request.existing_ideas if _uses_saved_taste(request) else [])))[:12],
+            "reference_artworks": [item.model_dump() for item in request.existing_artworks[:6]] if _uses_saved_taste(request) else [],
             "avoid_references": request.avoid_references[:12],
             "resolved": resolved[:10],
             "related_artists": qloo_artists[:8],

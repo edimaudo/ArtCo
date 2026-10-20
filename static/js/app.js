@@ -1,5 +1,9 @@
 (() => {
   const STATE_VERSION = 8;
+  const initialQuery = new URLSearchParams(window.location.search);
+  const requestedIntent = initialQuery.get('intent') || 'discover';
+  const validIntents = ['discover', 'find', 'curate', 'buy', 'learn'];
+  const initialIntent = requestedIntent === 'taste' ? 'discover' : (validIntents.includes(requestedIntent) ? requestedIntent : 'discover');
 
   const state = {
     profile: { loves: [], avoids: [], notes: '', discoveryLevel: 50, updatedAt: null },
@@ -9,7 +13,8 @@
     purchases: [],
     last: null,
     preferences: { theme: 'light', fontScale: 'md' },
-    intent: new URLSearchParams(window.location.search).get('intent') || 'discover',
+    intent: initialIntent,
+    personalizeExplore: requestedIntent === 'taste' || initialQuery.get('personalize_taste') === '1',
     inspiration: { images: [], preparing: false },
     searchRunActive: false,
   };
@@ -295,13 +300,14 @@
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
   }
 
-  function intentLabel(intent) {
+  function intentLabel(intent, personalized = false) {
+    if ((intent === 'discover' || intent === 'taste') && personalized) return 'Explore art with my saved taste';
     return {
-      discover: 'Discover something new',
-      find: 'Find something specific',
-      taste: 'Develop my taste',
-      curate: 'Curate a set of works',
-      buy: 'Find art to buy',
+      discover: 'Explore art',
+      find: 'Find art',
+      taste: 'Explore art with my saved taste',
+      curate: 'Curate a collection',
+      buy: 'Buy art',
       learn: 'Learn about art',
     }[intent] || 'New request';
   }
@@ -553,26 +559,30 @@
 
   function intentCopy(intent) {
     return {
-      discover: ['What are you looking for?', 'Start with what you love, then let ArtCo take the search somewhere new.', 'I love punk music and bold patterns. Find art with a similar energy, but take me somewhere unexpected.'],
-      find: ['What are you looking for?', 'Describe the artist, artwork, style, or visual detail you want to find.', 'Find an artist or artwork with this style, colour palette, or subject.'],
-      taste: ['What are you curious about?', 'Build on your saved artworks, taste profile, and earlier ideas to discover purchasable works that extend your interests.', 'Use my saved artworks and ideas to help me understand why I am drawn to bold patterns, expressive colour, and unusual textures, then find related art I can buy.'],
-      curate: ['What should work together?', 'Describe the space, mood, or idea you want the works to share.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
-      buy: ['What would you like to buy?', 'Share your budget, location, or the kind of work you hope to acquire.', 'Find original art under $500 that I can buy in Canada, with bold colour and geometric forms.'],
-      learn: ['What would you like to understand?', 'Ask about an artist, artwork, movement, or idea.', 'Explain abstract expressionism in plain language and show me works that help illustrate it.'],
-    }[intent] || ['What are you looking for?', 'Start with what you love, then let ArtCo take the search somewhere new.', 'Tell me what you are looking for.'];
+      discover: ['Explore art', 'Discover surprising connections. Turn on saved-taste personalization to build on your artworks, preferences, and earlier ideas.', 'I love punk music and bold patterns. Find art with a similar energy, but take me somewhere unexpected.'],
+      find: ['Find art', 'Search for a particular artist, artwork, style, subject, or visual detail.', 'Find an artist or artwork with this style, colour palette, or subject.'],
+      taste: ['Explore art', 'Discover art in the context of your saved artworks, taste profile, and earlier ideas.', 'Use my saved artworks and ideas to help me understand why I am drawn to bold patterns, expressive colour, and unusual textures, then find related art I can buy.'],
+      curate: ['Curate a collection', 'Build a coherent collection of purchasable works around a space, palette, mood, or theme.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
+      buy: ['Buy art', 'Search seller listings explicitly available to acquire. Include a budget, market, style, or medium.', 'Find original art under $500 that I can buy in Canada, with bold colour and geometric forms.'],
+      learn: ['Learn about art', 'Generate a learning guide about an artist, artwork, movement, technique, or idea.', 'Explain abstract expressionism in plain language, including key artists, techniques, and how to look at it.'],
+    }[intent] || ['Explore art', 'Discover new directions or personalise the search with your saved taste.', 'Tell me what you are looking for.'];
   }
 
   function setIntent(intent) {
-    state.intent = intent;
-    const [, , placeholder] = intentCopy(intent);
+    state.intent = intent === 'taste' ? 'discover' : intent;
+    const [title, description, placeholder] = intentCopy(state.intent);
     const titleNode = $('#conciergeTitle');
     const ledeNode = $('#conciergeLede');
     const input = $('#requestInput');
     const hint = $('#requestHint');
-    if (titleNode) titleNode.textContent = 'Your art concierge';
-    if (ledeNode) ledeNode.textContent = 'Select a service, then describe what you need.';
+    const personalization = $('#personalizationControl');
+    const personalizationInput = $('#personalizeExplore');
+    if (titleNode) titleNode.textContent = title;
+    if (ledeNode) ledeNode.textContent = description;
     if (input) input.placeholder = placeholder;
     if (hint) hint.textContent = 'Add as much or as little detail as you like.';
+    if (personalization) personalization.hidden = state.intent !== 'discover';
+    if (personalizationInput) personalizationInput.checked = Boolean(state.personalizeExplore);
   }
 
   function addProfileReference(value) {
@@ -614,29 +624,32 @@
     const lower = text.toLowerCase();
     if (/buy|purchase|acquire|for sale|budget|price/.test(lower)) return 'buy';
     if (/curate|collection|set of|several/.test(lower)) return 'curate';
-    if (/learn.*taste|develop.*taste|understand.*like/.test(lower)) return 'taste';
+    if (/learn.*taste|develop.*taste|understand.*like|help me.*taste/.test(lower)) return 'discover';
     if (/specific|looking for|need a|find me/.test(lower)) return 'find';
     if (/artist|artwork|movement|history|about|learn|explain|who is|what is/.test(lower)) return 'learn';
     return 'discover';
   }
 
   function cleanServicePrompt(intent) {
-    return ({ taste: 'develop my taste', curate: 'curate a set of works', buy: 'find art to buy' })[intent] || '';
+    return ({ taste: 'explore art with my saved taste', discover: 'explore art', curate: 'curate a collection', buy: 'buy art' })[intent] || '';
   }
 
   function buildRequest(prompt, feedback = null, explicitIntent = null) {
     const inferred = explicitIntent || inferIntent(prompt);
+    const promptRequestsPersonalTaste = /develop(?:ing)? my taste|help me .*taste|understand (?:what|why) .* (?:like|drawn to)|why am i drawn|what i am drawn to|build on my (?:saved )?(?:taste|artworks)/i.test(prompt || '');
+    const useSavedTaste = inferred === 'taste' || (inferred === 'discover' && (state.personalizeExplore || promptRequestsPersonalTaste));
     const budget = parseBudget(prompt);
     return {
-      intent: inferred,
+      intent: inferred === 'taste' ? 'discover' : inferred,
+      personalize_with_saved_taste: useSavedTaste,
       loves: [...state.profile.loves],
       avoid_references: [...state.profile.avoids],
       additional_interests: [],
-      profile_notes: inferred === 'taste' ? (String(state.profile.notes || '').trim().slice(0, 1000) || null) : null,
-      existing_ideas: inferred === 'taste'
+      profile_notes: useSavedTaste ? (String(state.profile.notes || '').trim().slice(0, 1000) || null) : null,
+      existing_ideas: useSavedTaste
         ? state.recent.map((item) => String(item.prompt || '').trim()).filter((item) => item && item.toLowerCase() !== cleanServicePrompt(inferred)).slice(0, 4)
         : [],
-      existing_artworks: inferred === 'taste' ? state.saved.slice(0, 6).map((work) => ({
+      existing_artworks: useSavedTaste ? state.saved.slice(0, 6).map((work) => ({
         title: String(work.title || '').slice(0, 180),
         artist: String(work.artist || '').slice(0, 140),
         medium: String(work.medium || '').slice(0, 120),
@@ -651,7 +664,7 @@
       size_preference: null,
       preferred_market: null,
       discovery_level: state.profile.discoveryLevel,
-      purchase_required: inferred === 'buy',
+      purchase_required: inferred === 'buy' || useSavedTaste,
       goal: prompt.trim() || null,
       number_of_works: inferred === 'curate' ? 3 : 1,
       feedback,
@@ -661,12 +674,13 @@
     };
   }
 
-  function resultsRunUrl(intent, fromConcierge = false) {
+  function resultsRunUrl(intent, fromConcierge = false, personalizeWithSavedTaste = state.personalizeExplore) {
     const runId = (window.crypto && typeof window.crypto.randomUUID === 'function')
       ? window.crypto.randomUUID()
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const params = new URLSearchParams({ intent: intent || 'discover', run: '1', run_id: runId });
     if (fromConcierge) params.set('from', 'concierge');
+    if (personalizeWithSavedTaste) params.set('personalize_taste', '1');
     return `/results?${params.toString()}`;
   }
 
@@ -683,7 +697,7 @@
     }
     $('#requestInput')?.setCustomValidity('');
     const params = new URLSearchParams(window.location.search);
-    const inferred = params.has('intent') ? state.intent : inferIntent(clean);
+    const inferred = (params.has('intent') || state.personalizeExplore) ? state.intent : inferIntent(clean);
     const request = buildRequest(clean, null, inferred);
     try {
       const selectedImages = state.inspiration.images.slice(0, MAX_REQUEST_IMAGES);
@@ -698,7 +712,7 @@
       sessionStorage.setItem('artConciergePendingRequest', JSON.stringify(request));
       // Images live only long enough to cross the same-tab page navigation.
       clearCurrentInspirationImages();
-      window.location.assign(resultsRunUrl(inferred, true));
+      window.location.assign(resultsRunUrl(request.intent, true, request.personalize_with_saved_taste));
     } catch (error) {
       const status = $('#inspirationMessage');
       if (status) status.textContent = error?.name === 'QuotaExceededError'
@@ -798,6 +812,7 @@
     state.searchRunActive = true;
     state.last = null;
     state.intent = payload.intent || state.intent;
+    state.personalizeExplore = Boolean(payload.personalize_with_saved_taste);
     const resultsHeading = $('#resultsHeading');
     const resultsSummary = $('#resultsSummary');
     const resultsMeta = $('#resultsMeta');
@@ -1018,9 +1033,9 @@
     if (state.searchRunActive) return;
     const intent = data.intent || state.intent;
     const labels = {
-      discover: 'Works worth a closer look.',
+      discover: data.request?.personalize_with_saved_taste ? 'Art to explore from your taste.' : 'Works worth a closer look.',
       find: 'The closest fits I found.',
-      taste: 'Artists and works to explore.',
+      taste: 'Art to explore from your taste.',
       curate: 'Works that make sense together.',
       buy: 'Art you can act on now.',
       learn: 'Your learning guide.',
@@ -1034,9 +1049,10 @@
     if (refinePanel) refinePanel.hidden = learningOnly;
     const resultsMeta = $('#resultsMeta');
     if (resultsMeta) resultsMeta.hidden = learningOnly;
-    // Curate, Develop my taste, and Buy only show commercial inventory explicitly
+    // Curate, personalised Explore, and Buy only show commercial inventory explicitly
     // listed as available. This guard also protects against older cached responses.
-    const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);
+    const usesSavedTaste = intent === 'taste' || Boolean(data.request?.personalize_with_saved_taste);
+    const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent) || usesSavedTaste;
     const results = (data.results || []).filter((work) => !purchaseOnlyIntent
       || (work.source_kind === 'commercial' && work.availability === 'available')).slice(0, 3);
     const notForSale = [];
@@ -1429,6 +1445,15 @@
       setIntent(intent);
       const url = new URL(window.location.href);
       url.searchParams.set('intent', intent);
+      if (state.personalizeExplore && intent === 'discover') url.searchParams.set('personalize_taste', '1');
+      else url.searchParams.delete('personalize_taste');
+      window.history.replaceState({}, '', url.toString());
+    });
+    $('#personalizeExplore')?.addEventListener('change', (event) => {
+      state.personalizeExplore = Boolean(event.target.checked);
+      const url = new URL(window.location.href);
+      if (state.personalizeExplore) url.searchParams.set('personalize_taste', '1');
+      else url.searchParams.delete('personalize_taste');
       window.history.replaceState({}, '', url.toString());
     });
 
