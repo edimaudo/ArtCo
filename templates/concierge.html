@@ -5,15 +5,14 @@
   <div class="concierge-shell">
     <header class="concierge-header">
       <h1 id="conciergeTitle">Your art concierge</h1>
-      <p class="lede" id="conciergeLede">Select a service, then describe what you need.</p>
+      <p class="lede" id="conciergeLede">Choose how you'd like to work with art, then describe what you have in mind.</p>
     </header>
 
     <section class="conversation-panel" aria-labelledby="conversationHeading">
       <h2 id="conversationHeading" class="sr-only">Concierge conversation</h2>
-      <div id="conversationHistory" class="conversation-history" aria-live="polite"></div>
 
       <div class="concierge-service-control">
-        <label class="sr-only" for="serviceSelect">Choose a service</label>
+        <label for="serviceSelect">What would you like to do?</label>
         <select id="serviceSelect" aria-label="Choose a service">
           <option value="discover">Explore art</option>
           <option value="find">Find art</option>
@@ -21,6 +20,7 @@
           <option value="buy">Buy art</option>
           <option value="learn">Learn about art</option>
         </select>
+        <p id="serviceDescription" class="service-description" aria-live="polite">Explore unexpected directions, or use your saved taste to build on artworks and ideas you already like.</p>
         <div class="explore-personalization" id="personalizationControl" hidden>
           <label for="personalizeExplore" class="explore-personalization-label">
             <input id="personalizeExplore" type="checkbox">
@@ -28,6 +28,8 @@
           </label>
         </div>
       </div>
+
+      <div id="conversationHistory" class="conversation-history" aria-live="polite"></div>
 
       <form id="requestForm" class="request-composer">
         <label class="sr-only" for="requestInput">Describe what you are looking for</label>

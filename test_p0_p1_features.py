@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261020-simplified-explore-personalization" in response.text
+    assert "/static/js/app.js?v=20261020-concierge-hierarchy" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -472,6 +472,18 @@ def test_concierge_exposes_five_clear_modes_and_moves_taste_to_explore_toggle():
     assert 'id="personalizeExplore"' in html
     assert 'Develop my taste</strong>' not in home
     assert home.count('class="service-card"') == 5
+
+
+def test_concierge_heading_and_dropdown_have_distinct_roles():
+    html = (ROOT / "templates/concierge.html").read_text()
+    js = (ROOT / "static/js/app.js").read_text()
+    assert '<h1 id="conciergeTitle">Your art concierge</h1>' in html
+    assert "Choose how you'd like to work with art, then describe what you have in mind." in html
+    assert '<label for="serviceSelect">What would you like to do?</label>' in html
+    assert 'id="serviceDescription" class="service-description"' in html
+    assert "const [, description, placeholder] = intentCopy(state.intent);" in js
+    assert "if (titleNode) titleNode.textContent = title;" not in js
+    assert "if (descriptionNode) descriptionNode.textContent = description;" in js
 
 
 def test_personalized_explore_uses_saved_references_and_enforces_purchase_only():

@@ -840,14 +840,24 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   width: 100%;
 }
 .concierge-service-control label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
   font-size: .92rem;
-  font-weight: 600;
+  font-weight: 650;
 }
 .concierge-service-control select {
   width: min(100%, 280px);
   min-height: 42px;
   padding: 0 30px 0 11px;
+  font-size: .95rem;
+}
+.service-description {
+  max-width: 660px;
+  margin: 10px 0 0;
+  color: var(--muted);
   font-size: .9rem;
+  line-height: 1.5;
 }
 
 @media (max-width: 600px) {

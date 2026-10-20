@@ -570,15 +570,13 @@
 
   function setIntent(intent) {
     state.intent = intent === 'taste' ? 'discover' : intent;
-    const [title, description, placeholder] = intentCopy(state.intent);
-    const titleNode = $('#conciergeTitle');
-    const ledeNode = $('#conciergeLede');
+    const [, description, placeholder] = intentCopy(state.intent);
+    const descriptionNode = $('#serviceDescription');
     const input = $('#requestInput');
     const hint = $('#requestHint');
     const personalization = $('#personalizationControl');
     const personalizationInput = $('#personalizeExplore');
-    if (titleNode) titleNode.textContent = title;
-    if (ledeNode) ledeNode.textContent = description;
+    if (descriptionNode) descriptionNode.textContent = description;
     if (input) input.placeholder = placeholder;
     if (hint) hint.textContent = 'Add as much or as little detail as you like.';
     if (personalization) personalization.hidden = state.intent !== 'discover';
