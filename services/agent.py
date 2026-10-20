@@ -102,7 +102,7 @@ async def _build_search_plan(
             request.intent.value,
             request.goal or "",
             signals.cultural_references,
-            list(dict.fromkeys(request.art_interests + signals.art_interests)),
+            list(dict.fromkeys([*request.art_interests, *signals.art_interests, *_taste_reference_directions(request)])),
             list(dict.fromkeys(request.mediums + signals.mediums)),
             qloo_artists,
             request.discovery_level,
@@ -125,8 +125,8 @@ async def _build_search_plan(
     # even when the cultural profile is sparse or Qloo/Gemini returns no data.
     fallback_by_intent = {
         "buy": ["contemporary art for sale", "original contemporary painting", "limited edition art print"],
-        "curate": ["contemporary painting", "art photography", "modern sculpture"],
-        "taste": ["contemporary painting", "abstract art", "figurative art"],
+        "curate": ["contemporary paintings available to buy", "art photography for sale", "modern sculpture for sale"],
+        "taste": ["artworks for sale related to your saved taste", "contemporary art available to buy", "abstract art for sale"],
         "learn": ["art history", "modern art", "contemporary art"],
     }
     fallbacks = fallback_by_intent.get(
@@ -215,6 +215,13 @@ def _deterministic_score(
     bridge_terms = set().union(*(_tokenize(value) for value in (cultural_art_directions or []))) if cultural_art_directions else set()
     bridge_matches = sum(1 for token in bridge_terms if token in metadata_haystack)
     score += min(12, bridge_matches * 2)
+    if request.intent.value == "taste":
+        reference_text: list[str] = [request.profile_notes or "", *request.existing_ideas]
+        for reference in request.existing_artworks:
+            reference_text.extend([reference.title, reference.artist, reference.medium, reference.description])
+        reference_tokens = _tokenize(" ".join(reference_text))
+        reference_matches = reference_tokens & metadata_tokens
+        score += min(24, len(reference_matches) * 5)
     qloo_names = {str(item.get("name") or "").strip().casefold() for item in qloo_artists if item.get("name")}
     avoid_names = {str(value).strip().casefold() for value in request.avoid_references if str(value).strip()}
     artist_name = work.artist.strip().casefold()
@@ -243,8 +250,8 @@ def _deterministic_score(
         score += 3 if work.description else 0
     if work.image_url:
         score += 4
-    if request.purchase_required:
-        score += 35 if work.source_kind == "commercial" and work.availability == "available" else -40
+    if _requires_purchasable_inventory(request):
+        score += 35 if _is_purchasable(work) else -40
     if request.discovery_level >= 70:
         score += 7 if direction and not any(token in " ".join(request.art_interests).lower() for token in _tokenize(direction)) else 2
     elif request.discovery_level <= 30:
@@ -262,8 +269,32 @@ def _has_image_candidate(work: Artwork) -> bool:
 
 
 def _is_purchasable(work: Artwork) -> bool:
-    """Only explicitly available commercial inventory belongs in Buy results."""
+    """True only for commercial works explicitly listed as available to acquire."""
     return work.source_kind == "commercial" and work.availability == "available"
+
+
+def _requires_purchasable_inventory(request: ConciergeRequest) -> bool:
+    """These services must return seller inventory, never institutional collection works."""
+    return bool(request.purchase_required or request.intent.value in {"curate", "taste", "buy"})
+
+
+def _taste_reference_directions(request: ConciergeRequest) -> list[str]:
+    """Build search phrases from the user's own saved works, notes, and earlier ideas."""
+    if request.intent.value != "taste":
+        return []
+    directions: list[str] = []
+    notes = (request.profile_notes or "").strip()
+    if notes:
+        directions.append(notes[:140])
+    directions.extend(str(idea).strip()[:160] for idea in request.existing_ideas if str(idea).strip())
+    for work in request.existing_artworks[:6]:
+        parts = [work.title, work.artist, work.medium]
+        query = " ".join(str(part).strip() for part in parts if str(part).strip())
+        if query:
+            directions.append(query[:160])
+        if work.description and (not query or _tokenize(work.description) - _tokenize(query)):
+            directions.append(work.description[:120])
+    return list(dict.fromkeys(value for value in directions if value))[:8]
 
 
 def _provider_configured(provider: Any) -> bool:
@@ -322,10 +353,10 @@ async def _research(
     if not include_extended_sources:
         institutional = [provider for provider in institutional if provider.name != "Rijksmuseum"]
 
-    # Buy is a commerce query, not an institutional collection query. Museum APIs
-    # provide collection metadata and reproductions; they do not provide purchase
-    # inventory. Excluding them also keeps a museum HTTP 403 out of Buy diagnostics.
-    if request.purchase_required or request.intent.value == "buy":
+    # Curate, Develop my taste, and Buy are purchase-oriented recommendations.
+    # Institutional APIs are excluded so museum collection records cannot appear
+    # as items the user could acquire.
+    if _requires_purchasable_inventory(request):
         provider_groups = [commercial]
     elif request.intent.value == "learn":
         provider_groups = [institutional, commercial]
@@ -334,8 +365,8 @@ async def _research(
 
     fallback_by_intent = {
         "buy": ["contemporary art for sale", "original contemporary painting"],
-        "curate": ["contemporary painting", "art photography"],
-        "taste": ["contemporary painting", "abstract art"],
+        "curate": ["contemporary painting for sale", "art photography available to buy"],
+        "taste": ["art for sale inspired by your taste", "contemporary painting available to buy"],
         "learn": ["modern art", "art history"],
     }
     fallback = fallback_by_intent.get(request.intent.value, ["contemporary art", "modern painting", "contemporary photography"])
@@ -486,7 +517,7 @@ def _select(
         # Curate prefers artist variety; other intents can return more than one work.
         if request.intent.value == "curate" and artist_key and artist_key in seen_artists and len(selected) < target:
             continue
-        if (request.purchase_required or request.intent.value == "buy") and not _is_purchasable(work):
+        if _requires_purchasable_inventory(request) and not _is_purchasable(work):
             continue
         selected.append(work)
         if artist_key:
@@ -800,10 +831,18 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         budget_max=request.budget_max,
     )
 
+    taste_reference_directions = _taste_reference_directions(request)
+    signal_interests = list(dict.fromkeys([
+        *request.additional_interests,
+        *request.art_interests,
+        *taste_reference_directions,
+    ]))[:16]
+    if request.profile_notes and request.intent.value == "taste":
+        signal_interests = list(dict.fromkeys([*signal_interests, request.profile_notes.strip()[:180]]))[:16]
     signals_task = asyncio.create_task(extract_request_signals(
         request.goal or "",
         request.loves,
-        request.additional_interests + request.art_interests,
+        signal_interests,
         request.avoid_references,
     ))
 
@@ -865,13 +904,25 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             early_signals = fallback_signals
     fast_text_directions = _fast_search_directions(request)
     search_goal = _searchable_goal(request)
-    text_directions = list(dict.fromkeys([
-        search_goal,
-        *early_signals.art_interests[:2],
-        *request.art_interests[:2],
-        *request.mediums[:1],
-        *[item for item in fast_text_directions if item != search_goal],
-    ]))[:4]
+    # For taste development, reserve catalogue queries for saved works and ideas
+    # before generic fallbacks so the recommendations actually build on them.
+    if request.intent.value == "taste":
+        text_directions = list(dict.fromkeys([
+            search_goal,
+            *taste_reference_directions[:2],
+            *early_signals.art_interests[:1],
+            *request.art_interests[:1],
+            *request.mediums[:1],
+            *[item for item in fast_text_directions if item != search_goal],
+        ]))[:4]
+    else:
+        text_directions = list(dict.fromkeys([
+            search_goal,
+            *early_signals.art_interests[:2],
+            *request.art_interests[:2],
+            *request.mediums[:1],
+            *[item for item in fast_text_directions if item != search_goal],
+        ]))[:4]
     text_directions = [item for item in text_directions if item]
     text_works, text_source_diagnostics = await _research(
         text_directions,
@@ -1123,17 +1174,19 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
 
     # Filter to works with a direct thumbnail or approved collection preview page.
     works = [work for work in works if _has_image_candidate(work) and _budget_ok(work, request)]
+    if _requires_purchasable_inventory(request):
+        works = [work for work in works if _is_purchasable(work)]
     status.append({"label": "Selecting the strongest matches", "state": "done"})
     review = None
     selected = _select(works, request, qloo_artists, review, cultural_art_directions)
     review_data = _review_map(review)
-    buy_intent = request.purchase_required or request.intent.value == "buy"
+    purchase_only_intent = _requires_purchasable_inventory(request)
     purchasable = [work for work in works if _is_purchasable(work)]
-    # Buy is never padded with institutional records, inquiry-only listings,
-    # withdrawn works, or any other result that cannot be purchased.
-    not_for_sale = [] if buy_intent else [work for work in works if not _is_purchasable(work)]
+    # Purchase-oriented recommendations are never padded with institutional
+    # records, inquiry-only listings, withdrawn works, or unavailable inventory.
+    not_for_sale = [] if purchase_only_intent else [work for work in works if not _is_purchasable(work)]
 
-    if buy_intent:
+    if purchase_only_intent:
         primary = [work for work in selected if _is_purchasable(work)][: min(max(1, request.number_of_works), 3)]
     elif request.intent.value == "curate":
         primary = selected[: min(max(1, request.number_of_works), 3)]
@@ -1148,8 +1201,12 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     intent_summary = {
         "discover": "I used the things you like as cultural signals, then searched beyond the most obvious art matches.",
         "find": "I translated your request into a focused search, then compared the resulting works against the brief.",
-        "taste": "I started from your references and explored related artists and works to help you understand what you respond to.",
-        "curate": "I looked for works that fit your brief individually and make sense together as a group.",
+        "taste": (
+            "I used your saved artworks, taste notes, and earlier ideas to guide a search for purchasable works that extend your preferences."
+            if request.existing_artworks or request.existing_ideas or request.profile_notes
+            else "I used your stated interests and current brief to search for purchasable works that could expand your taste."
+        ),
+        "curate": "I searched purchasable works that fit your brief individually and make sense together as a group.",
         "buy": "I searched connected sellers for works explicitly listed as available to purchase. Only buyable listings are shown.",
         "learn": "I searched the requested artistic territory and selected works that help put the subject into context.",
     }[request.intent.value]
@@ -1185,6 +1242,10 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
                 config.COLLECT24_API_KEY,
             ]),
             "purchase_inventory_found": len(purchasable),
+            "purchase_only_intent": purchase_only_intent,
+            "taste_reference_artworks_used": len(request.existing_artworks) if request.intent.value == "taste" else 0,
+            "taste_reference_ideas_used": len(request.existing_ideas) if request.intent.value == "taste" else 0,
+            "taste_profile_notes_used": bool(request.profile_notes and request.intent.value == "taste"),
             "institutional_works_found": sum(work.source_kind == "institution" for work in works),
             "image_bearing_works_found": len(works),
             "source_diagnostics": source_diagnostics,
@@ -1231,7 +1292,8 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "discovery_level": request.discovery_level,
         },
         "taste": {
-            "inputs": list(dict.fromkeys(request.loves + signals.cultural_references + request.additional_interests))[:12],
+            "inputs": list(dict.fromkeys(request.loves + signals.cultural_references + request.additional_interests + (request.existing_ideas if request.intent.value == "taste" else [])))[:12],
+            "reference_artworks": [item.model_dump() for item in request.existing_artworks[:6]] if request.intent.value == "taste" else [],
             "avoid_references": request.avoid_references[:12],
             "resolved": resolved[:10],
             "related_artists": qloo_artists[:8],
@@ -1241,7 +1303,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
         "search_directions_used": list(dict.fromkeys(item.get("label", "") for item in status if item.get("label"))),
         "critique": review_data.get("critique", ""),
         "results": [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in primary],
-        "not_for_sale": [] if buy_intent else [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in secondary],
+        "not_for_sale": [] if purchase_only_intent else [_serialize(work, request, qloo_artists, review_data, cultural_art_directions) for work in secondary],
         "purchase_available": len(purchasable),
         "commercial_found": sum(work.source_kind == "commercial" for work in works),
         "institutional_found": sum(work.source_kind == "institution" for work in works),

@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261018-buyable-inventory-and-fresh-search" in response.text
+    assert "/static/js/app.js?v=20261019-purchasable-taste-references" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -223,9 +223,9 @@ def test_all_six_concierge_intents_have_distinct_ranking_or_selection_rules():
 
     # Curate favours artist variety instead of returning several works by one artist.
     curated = [
-        artwork("a1", "One", "Same Artist"),
-        artwork("a2", "Two", "Same Artist"),
-        artwork("b1", "Three", "Different Artist"),
+        artwork("a1", "One", "Same Artist", source_kind="commercial", availability="available"),
+        artwork("a2", "Two", "Same Artist", source_kind="commercial", availability="available"),
+        artwork("b1", "Three", "Different Artist", source_kind="commercial", availability="available"),
     ]
     curated_result = agent._select(curated, ConciergeRequest(intent="curate", goal="Curate a set", number_of_works=2), [], None)
     assert len(curated_result) == 2
@@ -313,13 +313,14 @@ def test_buy_research_uses_commercial_inventory_only(monkeypatch):
     monkeypatch.setattr(agent, "institutional_providers", lambda: institutional)
     monkeypatch.setattr(agent, "_provider_configured", lambda _provider: True)
 
-    request = ConciergeRequest(intent="buy", purchase_required=True, goal="Buy an abstract painting", number_of_works=3)
-    works, diagnostics = asyncio.run(agent._research(["abstract painting for sale"], request, []))
-
-    assert works == []
-    assert set(calls) == {"Artsy", "Collect24"}
-    assert "The Metropolitan Museum of Art" not in calls
-    assert all(item["provider"] not in {"The Metropolitan Museum of Art", "Cleveland Museum of Art"} for item in diagnostics)
+    for intent in ("buy", "curate", "taste"):
+        calls.clear()
+        request = ConciergeRequest(intent=intent, purchase_required=(intent == "buy"), goal=f"{intent} an abstract painting", number_of_works=3)
+        works, diagnostics = asyncio.run(agent._research(["abstract painting for sale"], request, []))
+        assert works == []
+        assert set(calls) == {"Artsy", "Collect24"}
+        assert "The Metropolitan Museum of Art" not in calls
+        assert all(item["provider"] not in {"The Metropolitan Museum of Art", "Cleveland Museum of Art"} for item in diagnostics)
 
 
 def test_buy_empty_state_does_not_expose_backend_source_errors():
@@ -327,7 +328,8 @@ def test_buy_empty_state_does_not_expose_backend_source_errors():
     assert "No commercial art source is connected yet" not in js
     assert "Sources with connection issues:" not in js
     assert "No works explicitly listed as available to purchase matched this request." in js
-    assert "ArtCo has no seller inventory connected right now." in js
+    assert "No commercial seller inventory is connected right now." in js
+    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);" in js
 
 
 def test_new_results_run_never_restores_cached_previous_search():
@@ -385,13 +387,55 @@ def test_artlogic_buy_availability_requires_explicit_for_sale_status():
     }
 
 
+def test_curate_taste_and_buy_selection_only_returns_explicitly_buyable_inventory():
+    buyable = artwork("buyable", "Blue Study", "Gallery Artist", source_kind="commercial", availability="available")
+    unavailable = artwork("unavailable", "Unsold Study", "Other Artist", source_kind="commercial", availability="not_for_sale")
+    museum = artwork("museum", "Collection Study", "Museum Artist", source_kind="institution", availability="not_for_sale")
+    for intent in ("curate", "taste", "buy"):
+        request = ConciergeRequest(intent=intent, goal=f"{intent} a blue study", number_of_works=3)
+        selected = agent._select([buyable, unavailable, museum], request, [], None)
+        assert [work.id for work in selected] == ["buyable"]
+
+
+def test_develop_my_taste_uses_saved_work_notes_and_previous_ideas():
+    from models.schemas import ExistingArtworkReference
+    request = ConciergeRequest(
+        intent="taste",
+        goal="Help me expand my taste",
+        profile_notes="Bold geometry, tactile surfaces, and rust orange",
+        existing_ideas=["Art that feels like live punk music"],
+        existing_artworks=[ExistingArtworkReference(
+            title="Geometric Study", artist="Mara Example", medium="mixed media", description="Layered angular forms"
+        )],
+    )
+    directions = agent._taste_reference_directions(request)
+    assert "Bold geometry, tactile surfaces, and rust orange" in directions
+    assert "Art that feels like live punk music" in directions
+    assert "Geometric Study Mara Example mixed media" in directions
+
+    work = artwork("related", "Geometric Study No. 2", "Mara Example", medium="mixed media", description="Layered angular forms", source_kind="commercial", availability="available")
+    with_references = agent._deterministic_score(work, request, [], "contemporary art")
+    without_references = agent._deterministic_score(work, ConciergeRequest(intent="taste", goal="Help me expand my taste"), [], "contemporary art")
+    assert with_references > without_references
+
+
+def test_frontend_sends_saved_artworks_and_ideas_only_for_taste_and_filters_museum_results():
+    js = (ROOT / "static/js/app.js").read_text()
+    assert "existing_artworks: inferred === 'taste'" in js
+    assert "existing_ideas: inferred === 'taste'" in js
+    assert "profile_notes: inferred === 'taste'" in js
+    assert "state.saved.slice(0, 6).map((work) => ({" in js
+    assert "Build on your saved artworks, taste profile, and earlier ideas" in js
+    assert "const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);" in js
+
+
 def test_buy_api_and_ui_never_pad_with_non_purchasable_works():
     agent_source = (ROOT / "services/agent.py").read_text()
     js = (ROOT / "static/js/app.js").read_text()
-    assert '"not_for_sale": [] if buy_intent' in agent_source
+    assert '"not_for_sale": [] if purchase_only_intent' in agent_source
     assert "work.source_kind === 'commercial' && work.availability === 'available'" in js
     assert "const notForSale = [];" in js
-    assert "museum collection records are not shown here" in js
+    assert "museum collection records are not substituted" in js
 
 
 def test_fresh_search_invalidates_old_state_and_refreshes_bfcache_handoff():

@@ -40,11 +40,26 @@ class InspirationImage(BaseModel):
         return value
 
 
+class ExistingArtworkReference(BaseModel):
+    """Lightweight metadata for a saved artwork used as a taste reference."""
+
+    title: str = Field(default="", max_length=180)
+    artist: str = Field(default="", max_length=140)
+    medium: str = Field(default="", max_length=120)
+    description: str = Field(default="", max_length=300)
+    year: str = Field(default="", max_length=40)
+
+
 class ConciergeRequest(BaseModel):
     intent: Intent = Intent.discover
     loves: list[str] = Field(default_factory=list, max_length=12)
     avoid_references: list[str] = Field(default_factory=list, max_length=12)
     additional_interests: list[str] = Field(default_factory=list, max_length=8)
+    # These references are sent only with taste-development requests. They are
+    # metadata, not owned/purchased inventory claims or persistent uploads.
+    profile_notes: str | None = Field(default=None, max_length=1000)
+    existing_ideas: list[str] = Field(default_factory=list, max_length=6)
+    existing_artworks: list[ExistingArtworkReference] = Field(default_factory=list, max_length=6)
     art_interests: list[str] = Field(default_factory=list, max_length=8)
     mediums: list[str] = Field(default_factory=list, max_length=8)
     budget_min: float | None = Field(default=None, ge=0)
@@ -60,6 +75,11 @@ class ConciergeRequest(BaseModel):
     exclude_artwork_ids: list[str] = Field(default_factory=list, max_length=20)
     inspiration_image_ids: list[str] = Field(default_factory=list, max_length=5)
     inspiration_images: list[InspirationImage] = Field(default_factory=list, max_length=5)
+
+    @field_validator("existing_ideas")
+    @classmethod
+    def normalize_existing_ideas(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(str(value).strip()[:180] for value in values if str(value).strip()))[:6]
 
     @model_validator(mode="after")
     def validate_request(self) -> "ConciergeRequest":

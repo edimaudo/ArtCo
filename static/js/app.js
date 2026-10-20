@@ -555,7 +555,7 @@
     return {
       discover: ['What are you looking for?', 'Start with what you love, then let ArtCo take the search somewhere new.', 'I love punk music and bold patterns. Find art with a similar energy, but take me somewhere unexpected.'],
       find: ['What are you looking for?', 'Describe the artist, artwork, style, or visual detail you want to find.', 'Find an artist or artwork with this style, colour palette, or subject.'],
-      taste: ['What are you curious about?', 'Explore what draws you to certain art, and discover new directions from there.', 'Help me understand why I am drawn to bold patterns, expressive colour, and unusual textures.'],
+      taste: ['What are you curious about?', 'Build on your saved artworks, taste profile, and earlier ideas to discover purchasable works that extend your interests.', 'Use my saved artworks and ideas to help me understand why I am drawn to bold patterns, expressive colour, and unusual textures, then find related art I can buy.'],
       curate: ['What should work together?', 'Describe the space, mood, or idea you want the works to share.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
       buy: ['What would you like to buy?', 'Share your budget, location, or the kind of work you hope to acquire.', 'Find original art under $500 that I can buy in Canada, with bold colour and geometric forms.'],
       learn: ['What would you like to understand?', 'Ask about an artist, artwork, movement, or idea.', 'Explain abstract expressionism in plain language and show me works that help illustrate it.'],
@@ -620,6 +620,10 @@
     return 'discover';
   }
 
+  function cleanServicePrompt(intent) {
+    return ({ taste: 'develop my taste', curate: 'curate a set of works', buy: 'find art to buy' })[intent] || '';
+  }
+
   function buildRequest(prompt, feedback = null, explicitIntent = null) {
     const inferred = explicitIntent || inferIntent(prompt);
     const budget = parseBudget(prompt);
@@ -628,6 +632,17 @@
       loves: [...state.profile.loves],
       avoid_references: [...state.profile.avoids],
       additional_interests: [],
+      profile_notes: inferred === 'taste' ? (String(state.profile.notes || '').trim().slice(0, 1000) || null) : null,
+      existing_ideas: inferred === 'taste'
+        ? state.recent.map((item) => String(item.prompt || '').trim()).filter((item) => item && item.toLowerCase() !== cleanServicePrompt(inferred)).slice(0, 4)
+        : [],
+      existing_artworks: inferred === 'taste' ? state.saved.slice(0, 6).map((work) => ({
+        title: String(work.title || '').slice(0, 180),
+        artist: String(work.artist || '').slice(0, 140),
+        medium: String(work.medium || '').slice(0, 120),
+        description: String(work.description || '').slice(0, 300),
+        year: String(work.year || '').slice(0, 40),
+      })) : [],
       art_interests: [],
       mediums: [],
       budget_min: null,
@@ -1019,25 +1034,26 @@
     if (refinePanel) refinePanel.hidden = learningOnly;
     const resultsMeta = $('#resultsMeta');
     if (resultsMeta) resultsMeta.hidden = learningOnly;
-    // In Buy, even a malformed/older API response must not reintroduce museum,
-    // inquiry-only, withdrawn, or otherwise non-purchasable works.
-    const results = (data.results || []).filter((work) => intent !== 'buy'
+    // Curate, Develop my taste, and Buy only show commercial inventory explicitly
+    // listed as available. This guard also protects against older cached responses.
+    const purchaseOnlyIntent = ['buy', 'curate', 'taste'].includes(intent);
+    const results = (data.results || []).filter((work) => !purchaseOnlyIntent
       || (work.source_kind === 'commercial' && work.availability === 'available')).slice(0, 3);
     const notForSale = [];
     const visibleCount = results.length + notForSale.length;
     const visiblePurchasable = results.filter((work) => work.availability === 'available' && work.source_kind === 'commercial').length;
-    $('#resultsMeta').textContent = intent === 'buy'
-      ? `${visibleCount} work${visibleCount === 1 ? '' : 's'} shown · ${visiblePurchasable} available to acquire`
+    $('#resultsMeta').textContent = purchaseOnlyIntent
+      ? `${visibleCount} work${visibleCount === 1 ? '' : 's'} shown · all available to acquire`
       : `${visibleCount} recommendation${visibleCount === 1 ? '' : 's'} shown`;
     if (results.length) {
       $('#artGrid').innerHTML = results.map(renderCard).join('');
       bindArtworkImageFallbacks($('#artGrid'));
     } else {
       const configuredSellers = data.diagnostics?.commercial_sources_configured || [];
-      const emptyMessage = intent === 'buy'
+      const emptyMessage = purchaseOnlyIntent
         ? (configuredSellers.length
           ? 'No works explicitly listed as available to purchase matched this request. Try a different artist, style, medium, location, or budget.'
-          : 'ArtCo has no seller inventory connected right now. Buy searches only show works explicitly listed as available to purchase by a connected seller; museum collection records are not shown here.')
+          : 'No commercial seller inventory is connected right now. These recommendations only show works listed as available to purchase; museum collection records are not substituted.')
         : 'The connected art collections did not return a match with a retrievable image. Try a broader art style, artist, subject, or medium.';
       // Provider configuration and HTTP failures stay in /api/diagnostics and
       // server logs. They are not user-facing copy and must never leak a museum
@@ -1045,13 +1061,11 @@
       $('#artGrid').innerHTML = `<p class="empty-state">${escapeHtml(emptyMessage)}</p>`;
     }
 
-    $('#notForSaleSection').hidden = intent === 'buy' || !notForSale.length;
+    $('#notForSaleSection').hidden = purchaseOnlyIntent || !notForSale.length;
     if (notForSale.length) {
       $('#notForSaleGrid').innerHTML = notForSale.map(renderCard).join('');
       bindArtworkImageFallbacks($('#notForSaleGrid'));
-      $('#notForSaleHint').textContent = intent === 'buy'
-        ? 'Additional works related to your brief, but not currently available to acquire.'
-        : 'Additional works from museum and institutional collections. These are not available for purchase.';
+      $('#notForSaleHint').textContent = 'Additional works from museum and institutional collections. These are not available for purchase.';
     }
     renderLearningGuide(data.learning_guide, intent);
     renderVisualInspirationSummary(data.visual_inspiration || {}, intent);
