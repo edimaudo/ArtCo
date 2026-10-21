@@ -540,6 +540,18 @@ async def diagnostics_live() -> dict[str, Any]:
 
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
+    # Enforce this at the API boundary as well as the browser UI. Images may
+    # support a request, but every Concierge service must receive written input.
+    if not (payload.goal or "").strip():
+        return JSONResponse(
+            {
+                "success": False,
+                "detail": "Enter a short written description. Inspiration images can support your request, but cannot replace the text.",
+                "error_type": "WrittenPromptRequired",
+            },
+            status_code=422,
+        )
+    payload.goal = payload.goal.strip()
     # Image-attached Explore/Find/Curate requests require sequential work: complete
     # the written search, interpret the image, then run a separate visual search.
     # Learn is text-topic driven and does not process inspiration-image payloads.

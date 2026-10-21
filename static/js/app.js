@@ -706,11 +706,13 @@
     if (['discover', 'find', 'curate', 'learn'].includes(selectedIntent)) state.intent = selectedIntent;
     const clean = String(input?.value ?? prompt ?? '').trim();
     const learnNeedsTopic = state.intent === 'learn';
-    if ((learnNeedsTopic && !clean) || (!clean && state.inspiration.images.length === 0)) {
+    // Every Concierge mode requires a written brief. Inspiration images can
+    // refine the request, but must never satisfy the text requirement alone.
+    if (!clean) {
       if (input) {
         input.setCustomValidity(learnNeedsTopic
           ? 'Enter an artist, artwork title, movement, technique, or idea to learn about.'
-          : 'Add a short description or at least one inspiration image.');
+          : 'Enter a short description of what you would like ArtCo to do. Inspiration images can support your request but cannot replace the text.');
         input.reportValidity();
         input.focus();
       }
