@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261020-concierge-hierarchy" in response.text
+    assert "/static/js/app.js?v=20261021-dashboard-saved-concierge" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -190,16 +190,15 @@ def test_purchase_history_is_integrated_with_checkout_and_dashboard():
     assert "await recordVerifiedPurchase(data)" in js
     assert "async function checkTrackedPurchase(sessionId, button)" in js
     assert "data-purchase-session=" in js
-    assert 'id="dashboardPurchases"' in dashboard
-    assert 'id="dashboardPurchasesEmpty"' not in dashboard
-    assert 'id="purchasesTab"' in dashboard
-    assert 'id="purchasesPanel"' in dashboard
+    # Purchase tracking stays available to the checkout code but is hidden from the dashboard UI for now.
+    assert 'id="dashboardPurchases"' not in dashboard
+    assert 'id="purchasesTab"' not in dashboard
+    assert 'id="purchasesPanel"' not in dashboard
     assert "dashboardTabs[(index + 1) % dashboardTabs.length]" in js
-    assert 'id="purchasesTab"' in dashboard and '>Purchases</button>' in dashboard
     assert "No purchase checkouts have been started in this browser." not in dashboard
     assert "Review checkouts started in this browser" not in dashboard
     assert "Shipping and delivery updates come from the seller, not ArtCo." not in dashboard
-    assert dashboard.index('id="tasteTab"') < dashboard.index('id="purchasesTab"')
+    assert dashboard.index('id="tasteTab"') < dashboard.index('id="overviewPanel"')
 
 
 def test_concierge_intents_keep_distinct_ranking_or_selection_rules():
@@ -454,36 +453,51 @@ def test_fresh_search_invalidates_old_state_and_refreshes_bfcache_handoff():
 def test_taste_lower_fields_have_shared_label_height_and_top_alignment():
     css = (ROOT / "static/css/style.css").read_text()
     assert ".taste-editor-lower {" in css
-    lower = css[css.index(".taste-editor-lower {"):css.index(".taste-editor-lower textarea")]
-    assert "align-items: start;" in lower
-    assert "height: 2.8rem;" in lower
-    assert "min-height: 2.8rem;" in lower
+    assert "height: 3.1rem;" in css
+    assert "min-height: 3.1rem;" in css
+    assert ".taste-editor-lower > div { align-self: stretch; min-width: 0; }" in css
 
 
-def test_concierge_exposes_five_clear_modes_and_moves_taste_to_explore_toggle():
+def test_concierge_exposes_four_clear_modes_and_hides_buy_service_choice():
     html = (ROOT / "templates/concierge.html").read_text()
     home = (ROOT / "templates/index.html").read_text()
     assert '<option value="discover">Explore art</option>' in html
     assert '<option value="find">Find art</option>' in html
     assert '<option value="curate">Curate a collection</option>' in html
-    assert '<option value="buy">Buy art</option>' in html
     assert '<option value="learn">Learn about art</option>' in html
+    assert '<option value="buy">Buy art</option>' not in html
     assert '<option value="taste">' not in html
     assert 'id="personalizeExplore"' in html
     assert 'Develop my taste</strong>' not in home
-    assert home.count('class="service-card"') == 5
+    assert home.count('class="service-card"') == 4
+    assert 'intent=buy' not in home
+    assert 'Choose a service. Your concierge keeps the context as you return.' not in home
 
 
-def test_concierge_heading_and_dropdown_have_distinct_roles():
+def test_concierge_heading_dropdown_and_dynamic_submit_label_have_distinct_roles():
     html = (ROOT / "templates/concierge.html").read_text()
     js = (ROOT / "static/js/app.js").read_text()
     assert '<h1 id="conciergeTitle">Your art concierge</h1>' in html
     assert "Choose how you'd like to work with art, then describe what you have in mind." in html
     assert '<label for="serviceSelect">What would you like to do?</label>' in html
     assert 'id="serviceDescription" class="service-description"' in html
-    assert "const [, description, placeholder] = intentCopy(state.intent);" in js
-    assert "if (titleNode) titleNode.textContent = title;" not in js
+    assert 'id="askConciergeLabel"' in html
+    assert 'id="requestHint"' not in html
+    assert 'Add as much or as little detail as you like.' in html
+    assert 'Upload artwork, patterns, colours. These images are discarded when the search finishes.' in html
+    assert "const [serviceTitle, description, promptPlaceholder] = intentCopy(state.intent);" in js
+    assert r"if (askLabel) askLabel.textContent = String(serviceTitle).trim().split(/\s+/)[0] || 'Explore';" in js
     assert "if (descriptionNode) descriptionNode.textContent = description;" in js
+
+
+def test_saved_artworks_cards_prevent_provider_name_wrapping_and_balance_actions():
+    js = (ROOT / "static/js/app.js").read_text()
+    css = (ROOT / "static/css/style.css").read_text()
+    assert 'art-source" title="${escapeAttribute(work.source ||' in js
+    assert 'class="art-meta"${meta ?' in js and ' hidden' in js
+    assert "text-overflow: ellipsis;" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert ".art-actions .card-action" in css
 
 
 def test_personalized_explore_uses_saved_references_and_enforces_purchase_only():

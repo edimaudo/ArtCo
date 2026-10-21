@@ -13,7 +13,6 @@
   <div class="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
     <button class="dashboard-tab is-active" id="overviewTab" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" tabindex="0">Overview</button>
     <button class="dashboard-tab" id="tasteTab" type="button" role="tab" aria-selected="false" aria-controls="tastePanel" tabindex="-1">Your taste</button>
-    <button class="dashboard-tab" id="purchasesTab" type="button" role="tab" aria-selected="false" aria-controls="purchasesPanel" tabindex="-1">Purchases</button>
   </div>
 
   <section class="dashboard-tab-panel is-active" id="overviewPanel" role="tabpanel" aria-labelledby="overviewTab">
@@ -31,10 +30,10 @@
       <section class="dashboard-section" aria-labelledby="dashboardSavedHeading">
         <div class="dashboard-heading">
           <div>
-            <h2 id="dashboardSavedHeading">Saved art</h2>
+            <h2 id="dashboardSavedHeading">Saved ArtWorks</h2>
             <p>Works you decided were worth keeping.</p>
           </div>
-          <a class="section-link" href="/saved">View all saved art</a>
+          <a class="section-link" href="/saved">View all saved artworks</a>
         </div>
         <div id="dashboardSaved" class="saved-preview dashboard-saved-preview"></div>
         <p id="dashboardSavedEmpty" class="empty-state" hidden>You haven't saved any works yet.</p>
@@ -92,14 +91,6 @@
       </div>
     </div>
 
-  </section>
-
-  <section class="dashboard-tab-panel" id="purchasesPanel" role="tabpanel" aria-labelledby="purchasesTab" hidden>
-    <section class="dashboard-section dashboard-purchases" aria-labelledby="dashboardPurchasesHeading">
-      <div class="dashboard-heading"><div><h2 id="dashboardPurchasesHeading">Purchases</h2></div></div>
-      <div id="dashboardPurchases" class="purchase-history-list" aria-live="polite"></div>
-      <p id="dashboardPurchasesMessage" class="action-message" role="status" aria-live="polite"></p>
-    </section>
   </section>
 
   <div class="modal-backdrop" id="tasteUnsavedModal" hidden>

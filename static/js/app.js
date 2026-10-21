@@ -2,7 +2,7 @@
   const STATE_VERSION = 8;
   const initialQuery = new URLSearchParams(window.location.search);
   const requestedIntent = initialQuery.get('intent') || 'discover';
-  const validIntents = ['discover', 'find', 'curate', 'buy', 'learn'];
+  const validIntents = ['discover', 'find', 'curate', 'learn'];
   const initialIntent = requestedIntent === 'taste' ? 'discover' : (validIntents.includes(requestedIntent) ? requestedIntent : 'discover');
 
   const state = {
@@ -513,7 +513,6 @@
     const dashboardTabs = [
       { name: 'overview', tab: $('#overviewTab'), panel: $('#overviewPanel') },
       { name: 'taste', tab: $('#tasteTab'), panel: $('#tastePanel') },
-      { name: 'purchases', tab: $('#purchasesTab'), panel: $('#purchasesPanel') },
     ].filter((item) => item.tab && item.panel);
     const activateTab = (tabName, moveFocus = false, updateHash = false) => {
       const selected = dashboardTabs.find((item) => item.name === tabName) || dashboardTabs[0];
@@ -550,7 +549,7 @@
       });
     });
     const hash = window.location.hash.toLowerCase();
-    activateTab(hash === '#taste' ? 'taste' : hash === '#purchases' ? 'purchases' : 'overview');
+    activateTab(hash === '#taste' ? 'taste' : 'overview');
   }
 
   function renderHome() {
@@ -563,22 +562,24 @@
       find: ['Find art', 'Search for a particular artist, artwork, style, subject, or visual detail.', 'Find an artist or artwork with this style, colour palette, or subject.'],
       taste: ['Explore art', 'Discover art in the context of your saved artworks, taste profile, and earlier ideas.', 'Use my saved artworks and ideas to help me understand why I am drawn to bold patterns, expressive colour, and unusual textures, then find related art I can buy.'],
       curate: ['Curate a collection', 'Build a coherent collection of purchasable works around a space, palette, mood, or theme.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
-      buy: ['Buy art', 'Search seller listings explicitly available to acquire. Include a budget, market, style, or medium.', 'Find original art under $500 that I can buy in Canada, with bold colour and geometric forms.'],
       learn: ['Learn about art', 'Generate a learning guide about an artist, artwork, movement, technique, or idea.', 'Explain abstract expressionism in plain language, including key artists, techniques, and how to look at it.'],
     }[intent] || ['Explore art', 'Discover new directions or personalise the search with your saved taste.', 'Tell me what you are looking for.'];
   }
 
   function setIntent(intent) {
-    state.intent = intent === 'taste' ? 'discover' : intent;
-    const [, description, placeholder] = intentCopy(state.intent);
+    // Buy remains available through artwork acquisition actions, not as a Concierge
+    // service choice. Old links or persisted 'buy' intents should land on Explore.
+    const requested = intent === 'taste' ? 'discover' : intent;
+    state.intent = ['discover', 'find', 'curate', 'learn'].includes(requested) ? requested : 'discover';
+    const [serviceTitle, description, promptPlaceholder] = intentCopy(state.intent);
     const descriptionNode = $('#serviceDescription');
     const input = $('#requestInput');
-    const hint = $('#requestHint');
     const personalization = $('#personalizationControl');
     const personalizationInput = $('#personalizeExplore');
+    const askLabel = $('#askConciergeLabel');
     if (descriptionNode) descriptionNode.textContent = description;
-    if (input) input.placeholder = placeholder;
-    if (hint) hint.textContent = 'Add as much or as little detail as you like.';
+    if (input) input.placeholder = `${promptPlaceholder}\n\nAdd as much or as little detail as you like.`;
+    if (askLabel) askLabel.textContent = String(serviceTitle).trim().split(/\s+/)[0] || 'Explore';
     if (personalization) personalization.hidden = state.intent !== 'discover';
     if (personalizationInput) personalizationInput.checked = Boolean(state.personalizeExplore);
   }
@@ -979,9 +980,9 @@
         <div class="art-body">
           <div class="art-title">${escapeHtml(work.title || 'Untitled')}</div>
           <div class="art-artist">${escapeHtml(work.artist || 'Unknown artist')}</div>
-          <div class="art-meta">${escapeHtml(meta || work.source || '')}</div>
+          <div class="art-meta"${meta ? '' : ' hidden'}>${escapeHtml(meta)}</div>
           <div class="art-reason">${escapeHtml(reasons)}</div>
-          <div class="art-footer"><span class="availability ${availability}">${available ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE'}</span><span class="art-source">${escapeHtml(work.source || '')}</span></div>
+          <div class="art-footer"><span class="availability ${availability}">${available ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE'}</span><span class="art-source" title="${escapeAttribute(work.source || '')}">${escapeHtml(work.source || '')}</span></div>
           <div class="art-actions">
             ${link}
             <button class="card-action save-action" type="button" data-id="${id}" aria-pressed="${saved}">${saved ? 'Saved' : 'Save'}</button>

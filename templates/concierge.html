@@ -17,7 +17,6 @@
           <option value="discover">Explore art</option>
           <option value="find">Find art</option>
           <option value="curate">Curate a collection</option>
-          <option value="buy">Buy art</option>
           <option value="learn">Learn about art</option>
         </select>
         <p id="serviceDescription" class="service-description" aria-live="polite">Explore unexpected directions, or use your saved taste to build on artworks and ideas you already like.</p>
@@ -33,14 +32,15 @@
 
       <form id="requestForm" class="request-composer">
         <label class="sr-only" for="requestInput">Describe what you are looking for</label>
-        <textarea id="requestInput" rows="6" aria-describedby="requestHint" placeholder="Tell me what you are looking for."></textarea>
-        <p id="requestHint" class="request-hint">Add as much or as little detail as you like.</p>
+        <textarea id="requestInput" rows="6" placeholder="Tell me what you have in mind.
+
+Add as much or as little detail as you like."></textarea>
 
         <section class="visual-inspiration" aria-labelledby="inspirationHeading">
           <div class="visual-inspiration-heading">
             <div>
               <h2 id="inspirationHeading">Use images for inspiration</h2>
-              <p>Upload artwork, patterns, colours, or spaces for this search only. These images are discarded when the search finishes.</p>
+              <p>Upload artwork, patterns, colours. These images are discarded when the search finishes.</p>
             </div>
           </div>
           <div class="inspiration-controls">
@@ -55,7 +55,7 @@
         </section>
 
         <div class="composer-footer">
-          <button class="primary-button" type="submit">Ask my concierge <span aria-hidden="true">→</span></button>
+          <button class="primary-button" id="askConciergeButton" type="submit"><span id="askConciergeLabel">Explore</span><span aria-hidden="true">→</span></button>
         </div>
       </form>
     </section>
