@@ -12,7 +12,13 @@
     recent: [],
     purchases: [],
     last: null,
-    preferences: { theme: 'light', fontScale: 'md' },
+    preferences: {
+      theme: (() => {
+        try { return window.localStorage.getItem('artcoThemePreference') === 'dark' ? 'dark' : 'light'; }
+        catch (_) { return 'light'; }
+      })(),
+      fontScale: 'md',
+    },
     intent: initialIntent,
     personalizeExplore: requestedIntent === 'taste' || initialQuery.get('personalize_taste') === '1',
     inspiration: { images: [], preparing: false },
@@ -107,8 +113,10 @@
         state.recent = Array.isArray(existing.recent) ? existing.recent.slice(0, 8) : [];
         state.purchases = Array.isArray(existing.purchases) ? existing.purchases.slice(0, 12) : [];
         state.last = existing.last || null;
+        let immediateTheme = null;
+        try { immediateTheme = window.localStorage.getItem('artcoThemePreference'); } catch (_) { /* storage may be blocked */ }
         state.preferences = {
-          theme: existing.preferences?.theme === 'dark' ? 'dark' : 'light',
+          theme: immediateTheme === 'dark' || (immediateTheme !== 'light' && existing.preferences?.theme === 'dark') ? 'dark' : 'light',
           fontScale: ['sm', 'md', 'lg'].includes(existing.preferences?.fontScale) ? existing.preferences.fontScale : 'md',
         };
       } else {
@@ -329,9 +337,10 @@
   }
 
   function applyThemeControls() {
-    const theme = state.preferences.theme || 'light';
+    const theme = state.preferences.theme === 'dark' ? 'dark' : 'light';
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
+    try { window.localStorage.setItem('artcoThemePreference', theme); } catch (_) { /* theme still works for this page */ }
     const font = state.preferences.fontScale || 'md';
     document.documentElement.style.setProperty('--scale', ({ sm: .92, md: 1, lg: 1.12 }[font] || 1));
     const select = $('#fontScale');

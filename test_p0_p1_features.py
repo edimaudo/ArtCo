@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261021-dashboard-saved-concierge" in response.text
+    assert "/static/js/app.js?v=20261021-theme-spacing-taste" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -527,3 +527,32 @@ def test_legacy_taste_intent_is_supported_as_personalized_explore_compatibility(
     assert request.intent.value == "taste"
     assert agent._uses_saved_taste(request)
     assert agent._requires_purchasable_inventory(request)
+
+
+
+def test_theme_is_applied_before_stylesheet_and_does_not_follow_os_color_scheme():
+    base = (ROOT / "templates/base.html").read_text()
+    css = (ROOT / "static/css/style.css").read_text()
+    js = (ROOT / "static/js/app.js").read_text()
+    assert base.index("localStorage.getItem('artcoThemePreference')") < base.index('rel="stylesheet"')
+    assert ':root[data-theme="dark"]' in css
+    assert 'color-scheme: light dark;' not in css
+    assert "localStorage.setItem('artcoThemePreference', theme)" in js
+
+
+def test_concierge_composer_has_reduced_vertical_spacing():
+    css = (ROOT / "static/css/style.css").read_text()
+    assert '.concierge-page .concierge-service-control { margin-bottom: 22px; }' in css
+    assert 'min-height: 176px;' in css
+    assert '.concierge-page .visual-inspiration {\n  margin-top: 20px;\n  padding-top: 18px;' in css
+    assert '.concierge-page .composer-footer { margin-top: 10px; }' in css
+
+
+def test_dashboard_taste_labels_share_the_same_fixed_top_alignment():
+    css = (ROOT / "static/css/style.css").read_text()
+    html = (ROOT / "templates/dashboard.html").read_text()
+    assert 'id="tasteNotes"' in html and 'id="discoveryLevel"' in html
+    assert '.dashboard-page .taste-editor-lower {\n  align-items: start !important;' in css
+    assert '.dashboard-page .taste-editor-lower .field-label' in css
+    assert 'height: 3.1rem !important;' in css
+    assert 'align-items: flex-start !important;' in css

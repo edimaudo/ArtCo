@@ -17,7 +17,10 @@ def test_results_page_has_required_root():
 
 def test_request_is_persisted_before_navigation():
     js = (ROOT / "static/js/app.js").read_text()
-    assert "localStorage" not in js
+    # Only the small theme preference may use localStorage; request payloads and
+    # inspiration images must remain outside it and use sessionStorage handoff.
+    assert "localStorage.setItem('artConciergePendingRequest'" not in js
+    assert "localStorage.setItem('artCoResumeRequest'" not in js
     assert "putInspirationSetting('appState', appStateSnapshot())" in js
     start = js.index("function beginRequest(")
     end = js.index("async function runPendingRequest(", start)

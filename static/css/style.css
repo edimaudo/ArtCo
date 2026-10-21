@@ -1,17 +1,31 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color-scheme: light dark;
-  --bg: light-dark(#f7f6f2, #10100f);
-  --surface: light-dark(#ffffff, #171716);
-  --surface-2: light-dark(#eeece6, #22211f);
-  --text: light-dark(#151514, #f2f0e8);
-  --muted: light-dark(#66645d, #aaa79d);
-  --line: light-dark(#d9d6cd, #34332f);
-  --accent: light-dark(#2457c5, #8fb2ff);
-  --accent-text: light-dark(#ffffff, #0b1020);
-  --success: light-dark(#356d50, #9ed1ae);
-  --danger: light-dark(#8f3f37, #f2a29a);
+  color-scheme: light;
+  --bg: #f7f6f2;
+  --surface: #ffffff;
+  --surface-2: #eeece6;
+  --text: #151514;
+  --muted: #66645d;
+  --line: #d9d6cd;
+  --accent: #2457c5;
+  --accent-text: #ffffff;
+  --success: #356d50;
+  --danger: #8f3f37;
   --scale: 1;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #10100f;
+  --surface: #171716;
+  --surface-2: #22211f;
+  --text: #f2f0e8;
+  --muted: #aaa79d;
+  --line: #34332f;
+  --accent: #8fb2ff;
+  --accent-text: #0b1020;
+  --success: #9ed1ae;
+  --danger: #f2a29a;
 }
 
 * { box-sizing: border-box; }
@@ -1510,4 +1524,49 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   .taste-editor-lower textarea { min-height: 0; height: auto; }
   .taste-editor-lower textarea { min-height: 210px; }
   .taste-editor-lower .field-label { height: auto; min-height: 0; margin-bottom: 10px; }
+}
+
+
+/* October 21 UI refinements: compact Concierge composer and reliably aligned taste labels. */
+.concierge-page .concierge-service-control { margin-bottom: 22px; }
+.concierge-page .request-composer textarea {
+  min-height: 176px;
+  padding-block: 14px;
+}
+.concierge-page .visual-inspiration {
+  margin-top: 20px;
+  padding-top: 18px;
+}
+.concierge-page .composer-footer { margin-top: 10px; }
+
+.dashboard-page .taste-editor-lower {
+  align-items: start !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.dashboard-page .taste-editor-lower > div {
+  align-self: start !important;
+  min-width: 0;
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+.dashboard-page .taste-editor-lower .field-label {
+  display: flex !important;
+  align-items: flex-start !important;
+  box-sizing: border-box !important;
+  height: 3.1rem !important;
+  min-height: 3.1rem !important;
+  margin: 0 0 .35rem !important;
+  padding: 0 !important;
+  line-height: 1.35 !important;
+}
+@media (max-width: 860px) {
+  .dashboard-page .taste-editor-lower { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .concierge-page .request-composer textarea { min-height: 156px; }
+  .dashboard-page .taste-editor-lower .field-label {
+    height: auto !important;
+    min-height: 0 !important;
+    margin-bottom: 10px !important;
+  }
 }
