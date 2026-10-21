@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261021-theme-spacing-taste" in response.text
+    assert "/static/js/app.js?v=20261021-learn-validation-fix" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -569,3 +569,23 @@ def test_dashboard_taste_labels_share_the_same_fixed_top_alignment():
     assert '.dashboard-page .taste-editor-lower .field-label' in css
     assert 'height: 3.1rem !important;' in css
     assert 'align-items: flex-start !important;' in css
+
+
+def test_learning_service_is_text_driven_and_never_searches_or_recommends_works(monkeypatch):
+    image_payload = "YXJ0" + "eA" * 20
+    async def forbidden_search(*_args, **_kwargs):
+        raise AssertionError("Learn about art must not search artwork catalogues")
+
+    monkeypatch.setattr(agent, "_research", forbidden_search)
+    result = asyncio.run(agent.run_concierge(ConciergeRequest(
+        intent="learn",
+        goal="Tsumari in Bloom by Yayoi Kusama",
+        inspiration_image_ids=["image-1"],
+        inspiration_images=[{
+            "image_id": "image-1", "mime_type": "image/jpeg", "data": image_payload,
+        }],
+    )))
+    assert result["success"] is True
+    assert result["learning_guide"]["topic"] == "Tsumari in Bloom by Yayoi Kusama"
+    assert result["results"] == []
+    assert result["total_found"] == 0

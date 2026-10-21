@@ -49,7 +49,14 @@ async def dashboard_page(request: Request) -> HTMLResponse:
 
 @app.get("/concierge", response_class=HTMLResponse)
 async def concierge_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="concierge.html", context={"page": "concierge"})
+    return templates.TemplateResponse(
+        request=request,
+        name="concierge.html",
+        context={
+            "page": "concierge",
+            "inspiration_hidden": request.query_params.get("intent", "discover") == "learn",
+        },
+    )
 
 
 @app.get("/results", response_class=HTMLResponse)
@@ -533,12 +540,12 @@ async def diagnostics_live() -> dict[str, Any]:
 
 @app.post("/api/concierge")
 async def concierge(payload: ConciergeRequest) -> JSONResponse:
-    # Image-attached requests require sequential work: complete the written search,
-    # interpret the image, then run a separate visual search. Give that path its own
-    # deadline instead of cancelling the required image phase at 4.6 seconds.
+    # Image-attached Explore/Find/Curate requests require sequential work: complete
+    # the written search, interpret the image, then run a separate visual search.
+    # Learn is text-topic driven and does not process inspiration-image payloads.
     timeout_seconds = (
         CONCIERGE_IMAGE_RESPONSE_TIMEOUT_SECONDS
-        if payload.inspiration_images
+        if payload.inspiration_images and payload.intent.value != "learn"
         else CONCIERGE_RESPONSE_TIMEOUT_SECONDS
     )
     try:
@@ -558,7 +565,7 @@ async def concierge(payload: ConciergeRequest) -> JSONResponse:
         return JSONResponse(result)
     except asyncio.TimeoutError:
         logger.warning("Concierge request exceeded the %.1f second API deadline", timeout_seconds)
-        if payload.inspiration_images:
+        if payload.inspiration_images and payload.intent.value != "learn":
             detail = (
                 "The written-request search started, but ArtCo could not finish the required image interpretation and visual search "
                 "within the image-search deadline. No text-only results were returned. Retry with a clearer/smaller image, or remove it for a text-only search."

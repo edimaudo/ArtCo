@@ -571,7 +571,7 @@
       find: ['Find art', 'Search for a particular artist, artwork, style, subject, or visual detail.', 'Find an artist or artwork with this style, colour palette, or subject.'],
       taste: ['Explore art', 'Discover art in the context of your saved artworks, taste profile, and earlier ideas.', 'Use my saved artworks and ideas to help me understand why I am drawn to bold patterns, expressive colour, and unusual textures, then find related art I can buy.'],
       curate: ['Curate a collection', 'Build a coherent collection of purchasable works around a space, palette, mood, or theme.', 'Find three works for a small living room, with warm colours and an experimental feel.'],
-      learn: ['Learn about art', 'Generate a learning guide about an artist, artwork, movement, technique, or idea.', 'Explain abstract expressionism in plain language, including key artists, techniques, and how to look at it.'],
+      learn: ['Learn about art', 'Generate a learning guide from a written topic. Image uploads are not used in this mode, so enter the artwork title, artist, movement, technique, or idea.', 'Tsumari in Bloom by Yayoi Kusama: explain the artwork, artist, context, and what to look for.'],
     }[intent] || ['Explore art', 'Discover new directions or personalise the search with your saved taste.', 'Tell me what you are looking for.'];
   }
 
@@ -587,7 +587,12 @@
     const personalizationInput = $('#personalizeExplore');
     const askLabel = $('#askConciergeLabel');
     if (descriptionNode) descriptionNode.textContent = description;
-    if (input) input.placeholder = `${promptPlaceholder}\n\nAdd as much or as little detail as you like.`;
+    if (input) {
+      input.placeholder = `${promptPlaceholder}\n\nAdd as much or as little detail as you like.`;
+      input.setCustomValidity('');
+    }
+    const inspirationSection = $('#visualInspirationSection');
+    if (inspirationSection) inspirationSection.hidden = state.intent === 'learn';
     if (askLabel) askLabel.textContent = String(serviceTitle).trim().split(/\s+/)[0] || 'Explore';
     if (personalization) personalization.hidden = state.intent !== 'discover';
     if (personalizationInput) personalizationInput.checked = Boolean(state.personalizeExplore);
@@ -693,19 +698,26 @@
   }
 
   async function beginRequest(prompt) {
-    const clean = String(prompt || '').trim();
-    if (!clean && state.inspiration.images.length === 0) {
-      const input = $('#requestInput');
+    // Read the live textarea at submission time rather than relying on a value
+    // captured by an earlier event. The selected dropdown is authoritative: the
+    // wording of a prompt must not silently switch Find or Curate to another mode.
+    const input = $('#requestInput');
+    const selectedIntent = $('#serviceSelect')?.value;
+    if (['discover', 'find', 'curate', 'learn'].includes(selectedIntent)) state.intent = selectedIntent;
+    const clean = String(input?.value ?? prompt ?? '').trim();
+    const learnNeedsTopic = state.intent === 'learn';
+    if ((learnNeedsTopic && !clean) || (!clean && state.inspiration.images.length === 0)) {
       if (input) {
-        input.setCustomValidity('Add a short description or at least one inspiration image.');
+        input.setCustomValidity(learnNeedsTopic
+          ? 'Enter an artist, artwork title, movement, technique, or idea to learn about.'
+          : 'Add a short description or at least one inspiration image.');
         input.reportValidity();
         input.focus();
       }
       return;
     }
-    $('#requestInput')?.setCustomValidity('');
-    const params = new URLSearchParams(window.location.search);
-    const inferred = (params.has('intent') || state.personalizeExplore) ? state.intent : inferIntent(clean);
+    if (input) input.setCustomValidity('');
+    const inferred = state.intent;
     const request = buildRequest(clean, null, inferred);
     try {
       const selectedImages = state.inspiration.images.slice(0, MAX_REQUEST_IMAGES);
@@ -1432,6 +1444,7 @@
     if (serviceSelect) serviceSelect.value = state.intent;
     renderInspirationUI();
     $('#inspirationFiles')?.addEventListener('change', (event) => {
+      $('#requestInput')?.setCustomValidity('');
       handleInspirationUpload(event.target.files);
       event.target.value = '';
     });
@@ -1456,6 +1469,16 @@
 
     serviceSelect?.addEventListener('change', (event) => {
       const intent = event.target.value || 'discover';
+      const wasLearning = state.intent === 'learn';
+      if (intent === 'learn' && state.inspiration.images.length) {
+        clearCurrentInspirationImages();
+        renderInspirationUI();
+        const status = $('#inspirationMessage');
+        if (status) status.textContent = 'Image uploads are not used for Learn about art. Enter the artwork title, artist, or topic in the text area instead.';
+      } else if (wasLearning && intent !== 'learn') {
+        const status = $('#inspirationMessage');
+        if (status) status.textContent = '';
+      }
       state.intent = intent;
       setIntent(intent);
       const url = new URL(window.location.href);
@@ -1474,14 +1497,23 @@
 
     const form = $('#requestForm');
     const input = $('#requestInput');
+    // Keep submission under application control so a stale custom-validity
+    // message can never block the submit handler before it rechecks live input.
+    if (form) form.noValidate = true;
     form?.addEventListener('submit', (event) => {
       event.preventDefault();
-      beginRequest(input?.value || '');
+      beginRequest($('#requestInput')?.value || '');
+    });
+    // Clear a prior native validation message as soon as the user starts
+    // entering a valid description. Otherwise setCustomValidity can keep the
+    // browser from firing the submit event even after text has been entered.
+    input?.addEventListener('input', () => {
+      if (input.value.trim()) input.setCustomValidity('');
     });
     input?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        beginRequest(input.value);
+        beginRequest($('#requestInput')?.value || '');
       }
     });
   }

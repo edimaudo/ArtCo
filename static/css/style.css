@@ -1623,3 +1623,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 @media (max-width: 560px) {
   .saved-art-card .art-body { min-height: 0; }
 }
+
+
+/* Learn about art is text-topic driven; keep the inspiration uploader hidden even with authored display rules. */
+.concierge-page #visualInspirationSection[hidden] { display: none !important; }

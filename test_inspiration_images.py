@@ -234,3 +234,65 @@ def test_api_accepts_image_payload_without_persisting_it_to_response(monkeypatch
     assert response.json()["visual_inspiration"]["image_count"] == 1
     assert "data" not in response.text
     assert encoded_payload() not in response.text
+
+
+def test_learn_about_art_hides_image_uploader_and_exposes_written_topic_guidance():
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from main import app
+
+    response = TestClient(app).get("/concierge?intent=learn")
+    assert response.status_code == 200
+    assert 'id="visualInspirationSection" class="visual-inspiration" aria-labelledby="inspirationHeading" hidden' in response.text
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    assert "Image uploads are not used in this mode" in js
+    assert "Enter an artist, artwork title, movement, technique, or idea to learn about." in js
+
+
+def test_concierge_clears_stale_native_validation_and_uses_dropdown_intent():
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
+    assert "input?.addEventListener('input', () =>" in js
+    assert "if (input.value.trim()) input.setCustomValidity('')" in js
+    assert "if (form) form.noValidate = true;" in js
+    assert "const clean = String(input?.value ?? prompt ?? '').trim()" in js
+    assert "const inferred = state.intent;" in js
+    assert "const learnNeedsTopic = state.intent === 'learn';" in js
+
+
+def test_learning_guide_succeeds_and_ignores_any_attached_images(monkeypatch):
+    import asyncio
+    from pathlib import Path
+
+    import services.agent as agent
+    from models.schemas import InspirationImage
+
+    image = InspirationImage(
+        image_id="image-learning",
+        name="Tsumari in Bloom by Yayoi Kusama.jpg",
+        mime_type="image/jpeg",
+        data=encoded_payload(),
+    )
+
+    async def unexpected_vision_call(*_args, **_kwargs):
+        raise AssertionError("Learn about art must not require or call image interpretation")
+
+    monkeypatch.setattr(agent.config, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(agent, "analyze_inspiration_images", unexpected_vision_call)
+    result = asyncio.run(agent.run_concierge(ConciergeRequest(
+        intent="learn",
+        goal="Tsumari in Bloom by Yayoi Kusama: explain the artwork, artist, context, and what to look for.",
+        inspiration_image_ids=["image-learning"],
+        inspiration_images=[image],
+    )))
+
+    assert result["success"] is True
+    assert result["intent"] == "learn"
+    assert result["learning_guide"]["topic"].startswith("Tsumari in Bloom by Yayoi Kusama")
+    assert result["results"] == []
+    assert result["diagnostics"]["catalogue_search_performed"] is False
+    assert result["diagnostics"]["image_analysis_required"] is False
+    assert result["diagnostics"]["image_analysis_performed"] is False
+    assert result["diagnostics"]["images_ignored_for_learning"] is True
+    assert result["visual_inspiration"]["image_count"] == 0

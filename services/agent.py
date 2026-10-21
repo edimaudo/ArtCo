@@ -752,57 +752,31 @@ def _build_learning_guide(goal: str | None, works: list[Artwork]) -> dict[str, A
 
 
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
-    """Search the written brief first, then require an image-led second pass when images are attached.
+    """Run the Concierge flow for the selected service.
 
-    Text-only requests retain the short response target. Requests with images use a
-    longer API deadline because image interpretation and a second catalogue pass are
-    required work, not optional enrichment.
+    Explore, Find, and Curate run the written-request search before requiring a
+    separate image-led search when images are attached. Learn is text-topic driven,
+    ignores image payloads, and always returns a learning guide without art cards.
     """
     loop = asyncio.get_running_loop()
     started = loop.time()
-    has_images = bool(request.inspiration_images)
+    # Learn about art is driven by a required written topic. Ignore any stale or
+    # direct-API image payload in this mode; image-analysis failure must never
+    # prevent the educational guide from being returned.
+    ignored_learning_images = request.intent.value == "learn" and bool(request.inspiration_images)
+    has_images = bool(request.inspiration_images) and request.intent.value != "learn"
     response_target_ms = 17500 if has_images else 4500
     status: list[dict[str, str]] = [{"label": "Request received", "state": "done"}]
 
     # Learn about art produces an educational guide only. It does not run catalogue
-    # searches or surface artwork recommendations. When an inspiration image is
-    # attached, image interpretation is required and is folded into the guide.
+    # searches, recommend artwork cards, or interpret inspiration-image payloads.
+    # The UI requires a written topic and hides image uploads for this service. This
+    # backend guard also handles stale clients without failing the guide.
     if request.intent.value == "learn":
         guide = _build_learning_guide(request.goal, [])
-        visual_analysis = None
-        if has_images:
-            if not config.GEMINI_API_KEY:
-                detail = "ArtCo could not interpret the attached image because image analysis is not configured. No guide was returned without using the image. Configure Gemini and retry, or remove the image to request a text-only guide."
-                return {
-                    "success": False, "error_type": "RequiredVisualSearchFailed", "detail": detail,
-                    "diagnostics": {"duration_ms": round((loop.time() - started) * 1000), "response_target_ms": response_target_ms, "gemini_configured": False, "text_guide_generated": True},
-                    "visual_inspiration": {"image_count": len(request.inspiration_images), "analyzed": False, "message": detail},
-                    "results": [], "not_for_sale": [], "status": status,
-                }
-            try:
-                visual_analysis = await asyncio.wait_for(
-                    analyze_inspiration_images(request.goal or "", request.inspiration_images), timeout=8.5
-                )
-            except Exception as exc:
-                logger.warning("Required learning-image interpretation failed (%s)", type(exc).__name__)
-                visual_analysis = None
-            if visual_analysis is None:
-                detail = "ArtCo prepared the learning topic but could not interpret the attached image. No image-independent guide was returned. Check the image-analysis configuration and retry, or remove the image to request a text-only guide."
-                return {
-                    "success": False, "error_type": "RequiredVisualSearchFailed", "detail": detail,
-                    "diagnostics": {"duration_ms": round((loop.time() - started) * 1000), "response_target_ms": response_target_ms, "gemini_configured": bool(config.GEMINI_API_KEY), "gemini_model": config.GEMINI_MODEL, "text_guide_generated": True},
-                    "visual_inspiration": {"image_count": len(request.inspiration_images), "analyzed": False, "message": detail},
-                    "results": [], "not_for_sale": [], "status": status,
-                }
-            visual_note = visual_analysis.summary.strip()
-            if visual_note:
-                guide["overview"] += f" Your attached image offers a visual point of comparison: {visual_note}"
-            image_traits = list(dict.fromkeys([*visual_analysis.visual_attributes, *visual_analysis.colour_palette]))
-            if image_traits:
-                guide["look_closer"] = [f"Compare the image's {trait} with the ideas described above." for trait in image_traits[:3]] + guide["look_closer"][:2]
-            guide["source_note"] = "The attached image was interpreted as part of this guide. The visual description is a starting point for observation, not a verified identification or provenance record."
-            status.append({"label": "Attached image incorporated into the learning guide", "state": "done"})
         status.append({"label": "Learning guide generated", "state": "done"})
+        if ignored_learning_images:
+            status.append({"label": "Image payload ignored for Learn about art", "state": "warning"})
         elapsed = round((loop.time() - started) * 1000)
         return {
             "success": True,
@@ -817,15 +791,13 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
                 "duration_ms": elapsed, "response_target_ms": response_target_ms,
                 "gemini_configured": bool(config.GEMINI_API_KEY), "gemini_model": config.GEMINI_MODEL,
                 "text_guide_generated": True, "catalogue_search_performed": False,
-                "image_analysis_required": has_images, "image_analysis_performed": visual_analysis is not None,
+                "image_analysis_required": False, "image_analysis_performed": False,
+                "images_ignored_for_learning": ignored_learning_images,
             },
             "visual_inspiration": {
-                "image_count": len(request.inspiration_images), "analyzed": visual_analysis is not None,
-                "summary": visual_analysis.summary if visual_analysis else "",
-                "visual_attributes": visual_analysis.visual_attributes if visual_analysis else [],
-                "colour_palette": visual_analysis.colour_palette if visual_analysis else [],
-                "search_terms": visual_analysis.search_terms if visual_analysis else [],
-                "message": "Your image was incorporated into the learning guide." if visual_analysis else "",
+                "image_count": 0, "analyzed": False,
+                "summary": "", "visual_attributes": [], "colour_palette": [], "search_terms": [],
+                "message": "Learn about art uses the written topic. Add the artwork title, artist, or concept in the text area; image uploads are not used in this mode.",
             },
             "status": status,
         }
