@@ -1570,3 +1570,56 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
     margin-bottom: 10px !important;
   }
 }
+
+
+/* 2026-10-21: compact Concierge spacing and show full institution names on saved work cards. */
+.concierge-page .concierge-header .lede {
+  margin-top: 12px;
+  line-height: 1.5;
+}
+.concierge-page .conversation-panel { margin-top: 18px; }
+.concierge-page .conversation-history { margin-bottom: 8px; }
+.concierge-page .concierge-service-control { margin-bottom: 12px; }
+.concierge-page .concierge-service-control > label { margin-bottom: 8px; }
+.concierge-page .service-description { margin-top: 8px; }
+.concierge-page .request-composer textarea {
+  height: 156px;
+  min-height: 156px;
+  padding-block: 12px;
+  line-height: 1.5;
+}
+.concierge-page .visual-inspiration {
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.concierge-page .composer-footer { margin-top: 8px; }
+
+.saved-art-card { display: flex; flex-direction: column; height: 100%; }
+.saved-art-card .art-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 248px;
+}
+.saved-art-card .art-title { line-height: 1.35; }
+.saved-art-card .art-artist { line-height: 1.4; }
+.saved-art-card .art-location {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.4;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+.saved-art-card .art-meta { line-height: 1.45; }
+.saved-art-card .art-reason { min-height: 42px; }
+.saved-art-card .art-footer { justify-content: flex-start; margin-top: 2px; }
+.saved-art-card .art-actions { margin-top: auto; padding-top: 8px; }
+@media (max-width: 560px) {
+  .saved-art-card .art-body { min-height: 0; }
+}

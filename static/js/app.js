@@ -962,7 +962,13 @@
     return detailUrl ? `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}` : '';
   }
 
-  function renderCard(work) {
+  function renderCard(work, options = {}) {
+    const savedLayout = options.savedLayout === true;
+    const source = String(work.source || '').trim();
+    const locationLine = savedLayout && source
+      ? `<div class="art-location" title="${escapeAttribute(source)}">${escapeHtml(source)}</div>`
+      : '';
+    const footerSource = savedLayout ? '' : `<span class="art-source" title="${escapeAttribute(source)}">${escapeHtml(source)}</span>`;
     const available = work.availability === 'available' && work.source_kind === 'commercial';
     const availability = available ? 'available' : 'not_for_sale';
     const meta = [work.medium, work.dimensions, work.year, work.price_label].filter(Boolean).join(' · ');
@@ -984,14 +990,15 @@
     const saved = state.saved.some((item) => item.id === work.id);
     const reasons = (work.why || []).map((item) => String(item)).join(' · ');
     return `
-      <article class="art-card" data-art-id="${id}">
+      <article class="art-card${savedLayout ? ' saved-art-card' : ''}" data-art-id="${id}">
         <div class="art-image-wrap">${image}</div>
         <div class="art-body">
           <div class="art-title">${escapeHtml(work.title || 'Untitled')}</div>
           <div class="art-artist">${escapeHtml(work.artist || 'Unknown artist')}</div>
+          ${locationLine}
           <div class="art-meta"${meta ? '' : ' hidden'}>${escapeHtml(meta)}</div>
           <div class="art-reason">${escapeHtml(reasons)}</div>
-          <div class="art-footer"><span class="availability ${availability}">${available ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE'}</span><span class="art-source" title="${escapeAttribute(work.source || '')}">${escapeHtml(work.source || '')}</span></div>
+          <div class="art-footer"><span class="availability ${availability}">${available ? 'AVAILABLE TO ACQUIRE' : 'NOT FOR SALE'}</span>${footerSource}</div>
           <div class="art-actions">
             ${link}
             <button class="card-action save-action" type="button" data-id="${id}" aria-pressed="${saved}">${saved ? 'Saved' : 'Save'}</button>
@@ -1142,7 +1149,7 @@
       grid.innerHTML = '<p class="empty-state">You have not saved any works yet. Start a conversation with your concierge to find something worth keeping.</p>';
       return;
     }
-    grid.innerHTML = state.saved.map(renderCard).join('');
+    grid.innerHTML = state.saved.map((work) => renderCard(work, { savedLayout: true })).join('');
     bindArtworkImageFallbacks(grid);
   }
 

@@ -490,14 +490,27 @@ def test_concierge_heading_dropdown_and_dynamic_submit_label_have_distinct_roles
     assert "if (descriptionNode) descriptionNode.textContent = description;" in js
 
 
-def test_saved_artworks_cards_prevent_provider_name_wrapping_and_balance_actions():
+def test_saved_artworks_cards_show_full_institution_name_after_artist_and_balance_actions():
     js = (ROOT / "static/js/app.js").read_text()
     css = (ROOT / "static/css/style.css").read_text()
-    assert 'art-source" title="${escapeAttribute(work.source ||' in js
+    assert 'class="art-location" title="${escapeAttribute(source)}"' in js
+    assert 'state.saved.map((work) => renderCard(work, { savedLayout: true }))' in js
     assert 'class="art-meta"${meta ?' in js and ' hidden' in js
-    assert "text-overflow: ellipsis;" in css
+    assert ".saved-art-card .art-location" in css
+    assert "white-space: normal;" in css
+    assert "text-overflow: clip;" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
     assert ".art-actions .card-action" in css
+
+
+def test_concierge_spacing_is_compact_enough_to_keep_submit_action_visible():
+    css = (ROOT / "static/css/style.css").read_text()
+    assert ".concierge-page .concierge-header .lede" in css
+    assert ".concierge-page .conversation-panel { margin-top: 18px; }" in css
+    assert ".concierge-page .conversation-history { margin-bottom: 8px; }" in css
+    assert ".concierge-page .concierge-service-control { margin-bottom: 12px; }" in css
+    assert "height: 156px;" in css and "min-height: 156px;" in css
+    assert ".concierge-page .visual-inspiration" in css
 
 
 def test_personalized_explore_uses_saved_references_and_enforces_purchase_only():
