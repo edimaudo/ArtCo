@@ -1,6 +1,6 @@
 # ArtCo 
 
-## Overvier
+## Overview
 A user-centric art concierge that combines broader cultural taste.
 
 ## The concierge roles
