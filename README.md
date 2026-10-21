@@ -1,20 +1,17 @@
 # ArtCo 
 
 ## Overvier
-A user-centric art concierge that combines broader cultural taste .
+A user-centric art concierge that combines broader cultural taste.
 
 ## The concierge roles
-
-- **Discover**: find art beyond the obvious.
-- **Find**: search for a specific brief.
-- **Develop my taste**: learn through guided discovery.
-- **Curate**: assemble works around a context.
-- **Buy**: prioritize artwork that is actually available to acquire.
-- **Learn about art**: understand an artist, artwork, movement, or idea.
+- **Explore**: Discover surprising connections. Turn on saved-taste personalization to build on your artworks, preferences, and earlier idea. Also uses your saved art work
+- **Find**: Search for a particular artist, artwork, style, subject, or visual detail..
+- **Curate**: Build a coherent collection of purchasable works around a space, palette, mood, or theme..
+~~- **Buy**: prioritize artwork that is actually available to acquire.~~
+- **Learn about art**: Generate a learning guide about an artist, artwork, movement, technique, or idea.
 
 
 The concierge loop is:
-
 1. Resolve user-entered cultural references with Qloo `/search`.
 2. Use Qloo `/v2/insights` to establish artist/taste directions.
 3. Build an artwork search plan, optionally assisted by Gemini.
