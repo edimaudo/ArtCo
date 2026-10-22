@@ -54,7 +54,7 @@ a { color: inherit; }
 .topbar--landing { grid-template-columns: 1fr auto; }
 .brand {
   justify-self: start;
-  font-size: .84rem;
+  font-size: .96rem;
   font-weight: 700;
   letter-spacing: .16em;
   text-decoration: none;
