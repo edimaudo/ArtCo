@@ -6,8 +6,7 @@ A user-centric art concierge that combines broader cultural taste.
 ## The concierge roles
 - **Explore**: Discover surprising connections. Turn on saved-taste personalization to build on your artworks, preferences, and earlier idea. Also uses your saved art work
 - **Find**: Search for a particular artist, artwork, style, subject, or visual detail..
-- **Curate**: Build a coherent collection of purchasable works around a space, palette, mood, or theme..
-~~- **Buy**: prioritize artwork that is actually available to acquire.~~
+- **Curate**: Build a coherent collection of purchasable works around a space, palette, mood, or theme.
 - **Learn about art**: Generate a learning guide about an artist, artwork, movement, technique, or idea.
 
 
@@ -51,7 +50,10 @@ uvicorn main:app --reload
 
 Open http://127.0.0.1:8000
 
-
+## Next Steps
+- Incorporate art studio data into the app focused on North America (US and Canada)
+- Add a buy feature in my concierge using PayPal or Stripe --> **Buy**: prioritize artwork that is actually available to acquire.
+  - It will also show purchase info in the dashboard
 
 
 
