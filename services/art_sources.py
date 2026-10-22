@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -47,6 +47,7 @@ class ArtworkProvider(Protocol):
 
 
 class ArtInstituteProvider:
+    country_code = "US"
     name = "Art Institute of Chicago"
     base_url = "https://api.artic.edu/api/v1/artworks"
 
@@ -89,6 +90,7 @@ class ArtInstituteProvider:
 
 
 class MetProvider:
+    country_code = "US"
     name = "The Metropolitan Museum of Art"
     base_url = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 
@@ -139,6 +141,7 @@ class MetProvider:
 
 
 class ClevelandProvider:
+    country_code = "US"
     name = "Cleveland Museum of Art"
     base_url = "https://openaccess-api.clevelandart.org/api/artworks"
 
@@ -182,93 +185,13 @@ class ClevelandProvider:
         )
 
 
-class RijksmuseumProvider:
-    name = "Rijksmuseum"
-    base_url = "https://data.rijksmuseum.nl/search/collection"
-
-    async def search(self, query: str, limit: int = ARTWORK_RESULT_LIMIT) -> list[Artwork]:
-        # Rijksmuseum search returns Linked Art identifiers, not image URLs.
-        # Resolve only a very small fallback set through the documented
-        # object -> VisualItem -> DigitalObject chain to keep search responsive.
-        requested = min(max(limit, 1), 2)
-        headers = {"Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers, follow_redirects=True) as client:
-            response = await client.get(
-                self.base_url,
-                params={"description": query, "imageAvailable": "true", "type": "painting"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            items = payload.get("orderedItems") or []
-            identifiers = [item.get("id") for item in items if isinstance(item, dict) and item.get("id")][:requested]
-            works = await asyncio.gather(
-                *(self._resolve_work(client, uri) for uri in identifiers),
-                return_exceptions=True,
-            )
-        return [work for work in works if isinstance(work, Artwork) and _usable_image_url(work.image_url)][:limit]
-
-    async def _get_linked_record(self, client: httpx.AsyncClient, uri: str) -> dict[str, Any]:
-        parsed = urlparse(uri)
-        identifier = parsed.path.rstrip("/").split("/")[-1]
-        response = await client.get(f"https://data.rijksmuseum.nl/{identifier}", params={"_profile": "la-framed"})
-        response.raise_for_status()
-        return response.json()
-
-    async def _resolve_work(self, client: httpx.AsyncClient, object_uri: str) -> Artwork | None:
-        try:
-            obj = await self._get_linked_record(client, object_uri)
-            visual_ref = next((item.get("id") for item in (obj.get("shows") or []) if isinstance(item, dict) and item.get("id")), None)
-            if not visual_ref:
-                return None
-            visual = await self._get_linked_record(client, visual_ref)
-            digital_ref = next((item.get("id") for item in (visual.get("digitally_shown_by") or []) if isinstance(item, dict) and item.get("id")), None)
-            if not digital_ref:
-                return None
-            digital = await self._get_linked_record(client, digital_ref)
-            access_point = next((item.get("id") for item in (digital.get("access_point") or []) if isinstance(item, dict) and item.get("id")), None)
-            if not access_point:
-                return None
-            # Normalise to an appropriately sized, direct IIIF image URL.
-            parsed_image = urlparse(access_point)
-            parts = parsed_image.path.strip("/").split("/")
-            image_id = parts[0] if parts else ""
-            image_url = f"https://iiif.micr.io/{image_id}/full/800,/0/default.jpg" if image_id else access_point
-            title = next((item.get("content") for item in (obj.get("identified_by") or []) if isinstance(item, dict) and item.get("content")), None) or "Untitled"
-            artist = "Unknown artist"
-            production = obj.get("produced_by") or {}
-            creators = production.get("carried_out_by") or [] if isinstance(production, dict) else []
-            if creators and isinstance(creators[0], dict):
-                artist = creators[0].get("_label") or creators[0].get("label") or artist
-            year = None
-            timespan = production.get("timespan") if isinstance(production, dict) else None
-            if isinstance(timespan, dict):
-                year = timespan.get("begin_of_the_begin") or timespan.get("_label")
-            return Artwork(
-                id=f"rijks:{urlparse(object_uri).path.rstrip('/').split('/')[-1]}",
-                title=title,
-                artist=artist,
-                image_url=image_url,
-                detail_url=object_uri,
-                source=self.name,
-                source_kind="institution",
-                availability="not_for_sale",
-                price=None,
-                currency=None,
-                medium=None,
-                dimensions=None,
-                year=str(year) if year else None,
-                description=None,
-            )
-        except Exception as exc:
-            logger.debug("Rijksmuseum image resolution failed (%s)", type(exc).__name__)
-            return None
 
 
 class ArtsyProvider:
-    """Optional Artsy Partner API adapter.
+    """Optional Artsy Partner API adapter for published partner/gallery inventory.
 
-    It is intentionally disabled unless both an XAPP token and partner ID are configured.
-    The public API is not used as the application's foundation because Artsy is retiring it.
+    It is disabled unless both an XAPP token and partner ID are configured. The
+    public Search API is deliberately avoided because Artsy is retiring that API.
     """
 
     name = "Artsy"
@@ -278,18 +201,33 @@ class ArtsyProvider:
         if not ARTSY_XAPP_TOKEN or not ARTSY_PARTNER_ID:
             return []
         headers = {"X-XAPP-Token": ARTSY_XAPP_TOKEN, "Accept": "application/json"}
-        # The partner API supports partner_id and published filters. Query filtering is
-        # performed locally because the documented artworks endpoint does not expose q.
-        params = {"partner_id": ARTSY_PARTNER_ID, "published": "true"}
+        # Use the Partner API's published artwork inventory, not the retiring
+        # public Search API. Relevance is ranked locally against the requested brief.
+        params = {
+            "partner_id": ARTSY_PARTNER_ID,
+            "published": "true",
+            "size": min(max(limit * 5, limit), 100),
+            "page": 1,
+        }
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers) as client:
             response = await client.get(f"{self.base_url}/artworks", params=params)
             response.raise_for_status()
             payload = response.json()
-            items = payload.get("_embedded", {}).get("artworks") or []
-            return [
-                work for work in (_map_artsy(item) for item in items)
-                if _matches_query(work, query)
-            ][:limit]
+        items = (payload.get("_embedded") or {}).get("artworks") or []
+        candidates = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            work = _map_artsy(item)
+            if not _usable_image_url(work.image_url) or work.title == "Untitled":
+                continue
+            if not _matches_query(work, query):
+                continue
+            if not any(_same_work_identity(work, existing) for existing in candidates):
+                candidates.append(work)
+            if len(candidates) >= limit:
+                break
+        return candidates[:limit]
 
 
 class Collect24Provider:
@@ -383,11 +321,16 @@ def _map_artsy(item: dict[str, Any]) -> Artwork:
             price = float(amount)
     if price is None and isinstance(item.get("price_cents"), (int, float)):
         price = float(item["price_cents"]) / 100.0
+    thumbnail_url = (item.get("_links", {}).get("thumbnail", {}) or {}).get("href")
+    if isinstance(thumbnail_url, str) and "missing_image" in thumbnail_url.casefold():
+        thumbnail_url = None
+    elif isinstance(thumbnail_url, str):
+        thumbnail_url = thumbnail_url.replace("/square.jpg", "/large.jpg")
     return Artwork(
         id=f"artsy:{item.get('id')}",
         title=item.get("title") or "Untitled",
         artist=artist or "Unknown artist",
-        image_url=_normalise_image_url((item.get("_links", {}).get("thumbnail", {}) or {}).get("href")),
+        image_url=_normalise_image_url(thumbnail_url),
         detail_url=(item.get("_links", {}).get("permalink", {}) or {}).get("href"),
         source="Artsy",
         source_kind="commercial",
@@ -545,6 +488,9 @@ def _normalise_image_url(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     url = value.strip()
+    lowered_url = url.casefold()
+    if any(marker in lowered_url for marker in ("missing_image.png", "no-image", "no_image", "placeholder.svg", "default-placeholder")):
+        return None
     if url.startswith("//"):
         url = "https:" + url
     url = url.replace("{?width,height}", "?width=900&height=1125")
@@ -567,9 +513,26 @@ def _usable_image_url(value: Any) -> bool:
     return bool(_normalise_image_url(value))
 
 
+def _work_identity(work: Artwork) -> tuple[str, str, str]:
+    import re
+    title = re.sub(r"[^a-z0-9]+", " ", str(work.title or "").casefold()).strip()
+    artist = re.sub(r"[^a-z0-9]+", " ", str(work.artist or "").casefold()).strip()
+    if artist in {"", "unknown artist", "anonymous artist", "various artists"}:
+        artist = ""
+    generic_title = title in {"", "untitled", "untitled work", "unknown", "no title"}
+    image_key = _normalise_image_url(work.image_url) or str(work.id) if generic_title else ""
+    return title, artist, image_key
+
+
+def _same_work_identity(left: Artwork, right: Artwork) -> bool:
+    left_title, left_artist, left_image = _work_identity(left)
+    right_title, right_artist, right_image = _work_identity(right)
+    return bool(left_title and left_title == right_title and left_artist == right_artist and left_image == right_image)
+
+
 def _matches_query(work: Artwork, query: str) -> bool:
     haystack = " ".join(part for part in [work.title, work.artist, work.medium, work.description] if part).lower()
-    tokens = [token for token in query.lower().split() if len(token) > 3]
+    tokens = [token for token in query.lower().split() if len(token) > 3 and token not in {"more:pagemap:metatags-og_type:artwork"}]
     return not tokens or any(token in haystack for token in tokens)
 
 
@@ -579,4 +542,12 @@ def commercial_providers() -> list[ArtworkProvider]:
 
 
 def institutional_providers() -> list[ArtworkProvider]:
-    return [ArtInstituteProvider(), MetProvider(), ClevelandProvider(), RijksmuseumProvider()]
+    """Return the supported North American museum sources.
+
+    This build has no validated Canadian provider that consistently returns
+    image-bearing artwork records. Until one is integrated, use US museums as
+    the fallback; never query museums outside Canada/United States.
+    """
+    # No Canadian connector is enabled until it can reliably return a direct,
+    # image-bearing artwork result. Use US museums as the approved fallback.
+    return [ArtInstituteProvider(), MetProvider(), ClevelandProvider()]

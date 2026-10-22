@@ -8,7 +8,7 @@ from typing import Any
 
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
-from .image_proxy import display_image_url, is_allowed_detail_url
+from .image_proxy import display_image_url, is_allowed_detail_url, is_allowed_image_url
 from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
@@ -309,7 +309,7 @@ def _provider_configured(provider: Any) -> bool:
         return bool(config.ARTLOGIC_FEED_URL)
     if provider.name == "Collect24":
         return bool(config.COLLECT24_API_KEY)
-    # Institutional collection APIs do not require application credentials.
+    # Other institutional collection APIs do not require application credentials.
     return True
 
 
@@ -355,9 +355,6 @@ async def _research(
     status.append(progress)
     commercial = commercial_providers()
     institutional = institutional_providers()
-    if not include_extended_sources:
-        institutional = [provider for provider in institutional if provider.name != "Rijksmuseum"]
-
     # Curate, personalised Explore, and Buy are purchase-oriented recommendations.
     # Institutional APIs are excluded so museum collection records cannot appear
     # as items the user could acquire.
@@ -407,7 +404,7 @@ async def _research(
     # One query per provider per pass. Rotate through the best search directions
     # to retain breadth without an N-providers × N-queries explosion.
     tasks = [
-        _search_provider(provider, search_directions[index % len(search_directions)], limit=5)
+        _search_provider(provider, search_directions[index % len(search_directions)], limit=min(config.ARTWORK_RESULT_LIMIT, 8))
         for index, provider in enumerate(enabled_providers)
     ]
     if tasks:
@@ -425,10 +422,11 @@ async def _research(
 
     # Remove duplicates but retain image-less metadata long enough to diagnose
     # poor provider data. They are filtered before any visible result is chosen.
-    deduped: dict[str, Artwork] = {}
+    deduped_by_id: dict[str, Artwork] = {}
     for work in works:
         if _budget_ok(work, request):
-            deduped.setdefault(work.id, work)
+            deduped_by_id.setdefault(work.id, work)
+    deduped = _dedupe_artworks(list(deduped_by_id.values()))
 
     errors = [stat for stat in source_stats.values() if stat["errors"]]
     progress["state"] = "warning" if errors else "done"
@@ -440,9 +438,9 @@ async def _research(
                 "state": "warning",
                 "detail": ", ".join(stat["errors"][:3]),
             })
-    if not any(_has_image_candidate(work) for work in deduped.values()):
+    if not any(_has_image_candidate(work) for work in deduped):
         logger.warning("No image-bearing artwork candidates found for queries %s; source diagnostics=%s", search_directions, source_stats)
-    return list(deduped.values()), list(source_stats.values())
+    return deduped, list(source_stats.values())
 
 
 def _candidate_payload(work: Artwork) -> dict[str, Any]:
@@ -484,6 +482,45 @@ def _review_map(review: CandidateReview | None) -> dict[str, Any]:
     }
 
 
+
+def _dedupe_artworks(works: list[Artwork]) -> list[Artwork]:
+    """Remove cross-provider duplicates by normalized title/artist, not only source IDs."""
+    chosen: list[Artwork] = []
+    index_by_identity: dict[tuple[str, str, str], int] = {}
+    seen_ids: set[str] = set()
+
+    def identity(work: Artwork) -> tuple[str, str, str]:
+        title = re.sub(r"[^a-z0-9]+", " ", str(work.title or "").casefold()).strip()
+        artist = re.sub(r"[^a-z0-9]+", " ", str(work.artist or "").casefold()).strip()
+        if artist in {"", "unknown artist", "anonymous artist", "various artists"}:
+            artist = ""
+        # Do not collapse distinct works merely because a provider calls them
+        # "Untitled"; compare their image URLs in that case.
+        generic_title = title in {"", "untitled", "untitled work", "unknown", "no title"}
+        image_key = _normalise_image_url(work.image_url) or str(work.id) if generic_title else ""
+        return title, artist, image_key
+
+    def image_quality(work: Artwork) -> tuple[int, int, int]:
+        url = _normalise_image_url(work.image_url)
+        return (int(bool(url)), int(bool(url and is_allowed_image_url(url))), int(bool(work.detail_url)))
+
+    for work in works:
+        if work.id in seen_ids:
+            continue
+        seen_ids.add(work.id)
+        key = identity(work)
+        if not key[0]:
+            chosen.append(work)
+            continue
+        existing_index = index_by_identity.get(key)
+        if existing_index is None:
+            index_by_identity[key] = len(chosen)
+            chosen.append(work)
+        elif image_quality(work) > image_quality(chosen[existing_index]):
+            chosen[existing_index] = work
+    return chosen
+
+
 def _select(
     works: list[Artwork],
     request: ConciergeRequest,
@@ -506,6 +543,7 @@ def _select(
             return False
         return any(reference and (artist == reference or f" {reference} " in f" {artist} ") for reference in avoided_artists)
 
+    works = _dedupe_artworks(works)
     ranked = sorted(
         (work for work in works if _has_image_candidate(work) and not excluded(work)),
         key=lambda work: (
@@ -518,7 +556,7 @@ def _select(
 
     seen_artists: set[str] = set()
     selected: list[Artwork] = []
-    target = min(max(1, request.number_of_works), 8)
+    target = min(max(1, request.number_of_works), 3)
     for work in ranked:
         artist_key = work.artist.strip().lower()
         # Curate prefers artist variety; other intents can return more than one work.
@@ -529,7 +567,7 @@ def _select(
         selected.append(work)
         if artist_key:
             seen_artists.add(artist_key)
-        if len(selected) >= (target if request.intent.value in {"curate", "buy"} else 10):
+        if len(selected) >= target:
             break
     return selected
 
@@ -1126,7 +1164,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     for work in [*text_works, *visual_works]:
         if _budget_ok(work, request):
             merged_by_id.setdefault(work.id, work)
-    works = list(merged_by_id.values())
+    works = _dedupe_artworks(list(merged_by_id.values()))
 
     source_map: dict[str, dict[str, Any]] = {}
     for phase_name, diagnostics in (("text", text_source_diagnostics), ("image", visual_source_diagnostics)):
@@ -1273,7 +1311,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
             "preferred_market": request.preferred_market,
             "budget_min": request.budget_min,
             "budget_max": request.budget_max,
-            "number_of_works": min(max(1, request.number_of_works), 8),
+            "number_of_works": min(max(1, request.number_of_works), 3),
             "discovery_level": request.discovery_level,
             "personalize_with_saved_taste": _uses_saved_taste(request),
         },

@@ -4,6 +4,14 @@ from main import app
 from services.image_proxy import display_image_url, is_allowed_detail_url, is_allowed_image_url
 
 
+def _valid_jpeg_bytes():
+    from io import BytesIO
+    from PIL import Image
+    stream = BytesIO()
+    Image.new("RGB", (120, 160), (80, 110, 150)).save(stream, format="JPEG")
+    return stream.getvalue()
+
+
 def test_image_proxy_accepts_approved_art_sources():
     assert is_allowed_image_url("https://www.artic.edu/iiif/2/abc/full/843,/0/default.jpg")
     assert is_allowed_image_url("https://images.metmuseum.org/CRDImages/ep/original/example.jpg")
@@ -39,7 +47,7 @@ def test_artwork_detail_page_allowlist_rejects_external_or_insecure_pages():
     assert is_allowed_detail_url("https://www.artic.edu/artworks/123")
     assert is_allowed_detail_url("https://www.metmuseum.org/art/collection/search/123")
     assert is_allowed_detail_url("https://www.clevelandart.org/art/123")
-    assert is_allowed_detail_url("https://www.rijksmuseum.nl/en/collection/123")
+    assert not is_allowed_detail_url("https://www.rijksmuseum.nl/en/collection/123")
     assert is_allowed_detail_url("https://www.artsy.net/artwork/example")
     assert not is_allowed_detail_url("http://www.artic.edu/artworks/123")
     assert not is_allowed_detail_url("https://www.artic.edu.evil.example/artworks/123")
@@ -59,10 +67,11 @@ def test_artwork_preview_route_reads_open_graph_image(monkeypatch):
         content=f'<html><head><meta property="og:image" content="{image_url}"></head></html>'.encode(),
         request=httpx.Request("GET", page_url),
     )
+    image_bytes = _valid_jpeg_bytes()
     image_response = httpx.Response(
         200,
         headers={"content-type": "image/jpeg"},
-        content=b"mock-jpeg-bytes",
+        content=image_bytes,
         request=httpx.Request("GET", image_url),
     )
 
@@ -82,7 +91,7 @@ def test_artwork_preview_route_reads_open_graph_image(monkeypatch):
     response = client.get("/api/artwork-preview", params={"url": page_url})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/jpeg")
-    assert response.content == b"mock-jpeg-bytes"
+    assert response.content == image_bytes
 
 
 def test_concierge_markup_omits_redundant_image_storage_copy_and_limit():
@@ -95,7 +104,7 @@ def test_concierge_markup_omits_redundant_image_storage_copy_and_limit():
     assert 'id="inspirationFiles"' in response.text
 
 
-def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid():
+def test_results_cap_recommendations_to_three_and_keep_three_column_desktop_grid():
     from pathlib import Path
     root = Path(__file__).resolve().parent
     js = (root / "static/js/app.js").read_text()
@@ -113,7 +122,7 @@ def test_results_cap_recommendations_to_three_and_use_three_column_desktop_grid(
     assert "width: min(100%, 280px)" in css
     assert "Images are stored in this browser" not in concierge
     assert "Optional · Up to 5 per request" not in concierge
-    assert 'referrerpolicy="no-referrer"' not in js
+    assert 'referrerpolicy="no-referrer"' in js
     assert "const detailUrl = image.dataset.detailUrl" in js
     assert "const originalSrc = image.dataset.originalSrc" in js
 
@@ -146,7 +155,7 @@ def test_artwork_preview_route_recovers_from_img_src_when_og_image_is_missing(mo
     image_response = httpx.Response(
         200,
         headers={"content-type": "image/jpeg"},
-        content=b"mock-primary-image",
+        content=_valid_jpeg_bytes(),
         request=httpx.Request("GET", image_url),
     )
 
@@ -163,7 +172,7 @@ def test_artwork_preview_route_recovers_from_img_src_when_og_image_is_missing(mo
     monkeypatch.setattr(app_main.httpx, "AsyncClient", FakeClient)
     response = TestClient(app_main.app).get("/api/artwork-preview", params={"url": page_url})
     assert response.status_code == 200
-    assert response.content == b"mock-primary-image"
+    assert response.content == _valid_jpeg_bytes()
 
 
 def test_artsy_collection_pages_are_eligible_for_safe_image_fallback():
@@ -174,7 +183,7 @@ def test_artsy_collection_pages_are_eligible_for_safe_image_fallback():
 
 def test_proxy_recognizes_valid_jpeg_bytes_with_generic_content_type():
     from main import _sniff_image_media_type
-    assert _sniff_image_media_type("application/octet-stream", b"\xff\xd8\xff\xe0jpeg") == "image/jpeg"
+    assert _sniff_image_media_type("application/octet-stream", _valid_jpeg_bytes()) == "image/jpeg"
     assert _sniff_image_media_type("application/octet-stream", b"<html>not an image</html>") is None
 
 
@@ -199,8 +208,8 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
         return {
             "success": True,
             "intent": payload.intent.value,
-            "results": [{"id": f"primary-{i}"} for i in range(5)],
-            "not_for_sale": [{"id": f"secondary-{i}"} for i in range(5)],
+            "results": [{"id": f"primary-{i}"} for i in range(8)],
+            "not_for_sale": [{"id": f"secondary-{i}"} for i in range(8)],
         }
 
     monkeypatch.setattr(app_main, "run", fake_run)
@@ -221,7 +230,7 @@ def test_concierge_api_caps_all_visible_artwork_cards_to_three(monkeypatch):
 def test_static_assets_are_versioned_to_avoid_stale_result_caps():
     from pathlib import Path
     html = (Path(__file__).resolve().parent / "templates/base.html").read_text()
-    assert "/static/js/app.js?v=20261021-learn-validation-fix" in html
+    assert "/static/js/app.js?v=20261021-na-museum-three-results" in html
     assert "/static/css/style.css?v=20261021-theme-spacing-taste" in html
 
 
@@ -269,13 +278,13 @@ def test_saved_more_like_action_starts_a_new_request():
     assert "request.inspiration_image_ids = []" in js
 
 
-def test_saved_artwork_preview_fallback_tries_source_page_before_direct_url():
+def test_saved_artwork_preview_fallback_prefers_direct_and_exact_work_before_source_page():
     from pathlib import Path
     js = (Path(__file__).resolve().parent / "static/js/app.js").read_text()
     start = js.index("function bindArtworkImageFallbacks(root)")
     end = js.index("function artworkPreviewUrl(detailUrl)", start)
     fallback = js[start:end]
-    assert fallback.index("image.src = `/api/artwork-preview?url=") < fallback.index("image.src = originalSrc")
+    assert fallback.index("image.src = originalSrc") < fallback.index("image.src = artworkFallbackUrl") < fallback.index("image.src = `/api/artwork-preview?url=")
 
 
 def test_qloo_ignores_avoid_references_and_visual_subjects(monkeypatch):
@@ -393,8 +402,9 @@ def test_artwork_preview_skips_failed_metadata_image_and_tries_next_candidate(mo
         request=httpx.Request("GET", page_url),
     )
     broken_response = httpx.Response(403, request=httpx.Request("GET", broken_url))
+    recovered_bytes = _valid_jpeg_bytes()
     good_response = httpx.Response(
-        200, headers={"content-type": "image/jpeg"}, content=b"recovered-artwork-image",
+        200, headers={"content-type": "image/jpeg"}, content=recovered_bytes,
         request=httpx.Request("GET", good_url),
     )
 
@@ -408,7 +418,7 @@ def test_artwork_preview_skips_failed_metadata_image_and_tries_next_candidate(mo
     monkeypatch.setattr(app_main.httpx, "AsyncClient", FakeClient)
     response = TestClient(app_main.app).get("/api/artwork-preview", params={"url": page_url})
     assert response.status_code == 200
-    assert response.content == b"recovered-artwork-image"
+    assert response.content == recovered_bytes
 
 
 def test_artwork_image_fallback_searches_for_the_same_work(monkeypatch):
@@ -442,3 +452,120 @@ def test_recommendation_markup_has_no_preview_unavailable_fallback_copy():
     assert "Preview unavailable" not in js
     assert "/api/artwork-image-fallback?" in js
     assert "data-artwork-title" in js
+
+
+def test_image_proxy_rejects_html_or_svg_placeholders_even_when_declared_as_images():
+    from main import _sniff_image_media_type
+    assert _sniff_image_media_type("image/jpeg", b"<html><body>denied</body></html>" + b" " * 64) is None
+    assert _sniff_image_media_type("image/svg+xml", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>' + b" " * 64) is None
+
+
+def test_non_north_american_museum_hosts_are_no_longer_allowlisted():
+    assert not is_allowed_image_url("https://ids.si.edu/ids/deliveryService?id=NPG-NPG_123")
+    assert not is_allowed_image_url("https://www.nationalgallery.org.uk/media/example.jpg")
+    assert not is_allowed_detail_url("https://www.nationalgallery.org.uk/paintings")
+    assert not is_allowed_detail_url("https://americanart.si.edu/artwork/example")
+
+
+def test_artsy_adapter_maps_large_image_and_rejects_missing_thumbnail():
+    from services.art_sources import _map_artsy
+    artwork = _map_artsy({
+        "id": "work-1", "title": "Bloom", "can_acquire": True,
+        "_embedded": {"artists": [{"name": "Yayoi Kusama"}]},
+        "_links": {"thumbnail": {"href": "https://d32dm0rphc51dk.cloudfront.net/abc/square.jpg"},
+                   "permalink": {"href": "https://www.artsy.net/artwork/work-1"}},
+    })
+    missing = _map_artsy({"id": "work-2", "title": "Missing", "_links": {"thumbnail": {"href": "https://d32dm0rphc51dk.cloudfront.net/assets/shared/missing_image.png"}}})
+    assert artwork.image_url == "https://d32dm0rphc51dk.cloudfront.net/abc/large.jpg"
+    assert missing.image_url is None
+
+def test_artwork_dedupes_across_provider_specific_ids():
+    from services.agent import _dedupe_artworks
+    from services.art_sources import Artwork
+    works = [
+        Artwork(id="met:1", title="Tsumari in Bloom", artist="Yayoi Kusama", image_url="https://images.metmuseum.org/a.jpg", detail_url="https://www.metmuseum.org/a", source="Met", source_kind="institution", availability="not_for_sale", price=None, currency=None, medium="painting", dimensions=None, year="2020", description=None),
+        Artwork(id="aic:2", title="Tsumari in Bloom", artist="Yayoi Kusama", image_url="https://www.artic.edu/iiif/2/b/full/843,/0/default.jpg", detail_url="https://www.artic.edu/artworks/2", source="Art Institute of Chicago", source_kind="institution", availability="not_for_sale", price=None, currency=None, medium="painting", dimensions=None, year="2020", description=None),
+        Artwork(id="met:3", title="Other Work", artist="Yayoi Kusama", image_url="https://images.metmuseum.org/c.jpg", detail_url="https://www.metmuseum.org/c", source="Met", source_kind="institution", availability="not_for_sale", price=None, currency=None, medium="painting", dimensions=None, year="2020", description=None),
+    ]
+    assert [work.id for work in _dedupe_artworks(works)] == ["met:1", "met:3"]
+
+def test_institutional_sources_are_limited_to_north_american_fallback_sources():
+    from services.art_sources import institutional_providers
+    providers = institutional_providers()
+    names = [provider.name for provider in providers]
+    assert names == ["Art Institute of Chicago", "The Metropolitan Museum of Art", "Cleveland Museum of Art"]
+    assert all(getattr(provider, "country_code", None) == "US" for provider in providers)
+    assert not any("Smithsonian" in name or "Rijksmuseum" in name or "National Gallery, London" in name for name in names)
+    from services.config import ARTWORK_RESULT_LIMIT
+    assert ARTWORK_RESULT_LIMIT <= 3
+
+
+def test_page_preview_prefers_real_inline_art_over_generic_og_image(monkeypatch):
+    import httpx
+    import main as app_main
+    page_url = "https://www.artic.edu/artworks/789"
+    logo_url = "https://www.artic.edu/iiif/2/site-logo/full/843,/0/default.jpg"
+    art_url = "https://www.artic.edu/iiif/2/real-art/full/843,/0/default.jpg"
+    page_response = httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"},
+        content=(f'<html><head><meta property="og:image" content="{logo_url}"></head><body>'
+                 f'<img alt="Artwork image" width="900" height="1200" src="{art_url}"></body></html>').encode(),
+        request=httpx.Request("GET", page_url))
+    art_bytes = _valid_jpeg_bytes()
+    art_response = httpx.Response(200, headers={"content-type": "image/jpeg"}, content=art_bytes, request=httpx.Request("GET", art_url))
+    calls = []
+    class FakeClient:
+        def __init__(self, *args, **kwargs): self.responses = {page_url: page_response, art_url: art_response, logo_url: httpx.Response(200, headers={"content-type":"image/jpeg"}, content=_valid_jpeg_bytes(), request=httpx.Request("GET", logo_url))}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): calls.append(url); return self.responses[url]
+    monkeypatch.setattr(app_main.httpx, "AsyncClient", FakeClient)
+    response = TestClient(app_main.app).get("/api/artwork-preview", params={"url": page_url})
+    assert response.status_code == 200
+    assert response.content == art_bytes
+    assert art_url in calls
+    assert logo_url not in calls
+
+
+def test_artsy_search_uses_configured_partner_inventory_not_retiring_public_search(monkeypatch):
+    import httpx
+    import services.art_sources as sources
+    monkeypatch.setattr(sources, "ARTSY_XAPP_TOKEN", "test-token")
+    monkeypatch.setattr(sources, "ARTSY_PARTNER_ID", "partner-123")
+    request_seen = {}
+    payload = {"_embedded": {"artworks": [
+        {"id": "a1", "title": "Red Bloom", "can_acquire": True, "sold": False,
+         "_embedded": {"artists": [{"name": "Yayoi Kusama"}]},
+         "_links": {"thumbnail": {"href": "https://d32dm0rphc51dk.cloudfront.net/a1/medium.jpg"}, "permalink": {"href": "https://www.artsy.net/artwork/a1"}}},
+        {"id": "a2", "title": "Blue Garden", "can_acquire": True, "sold": False,
+         "_embedded": {"artists": [{"name": "Another Artist"}]},
+         "_links": {"thumbnail": {"href": "https://d32dm0rphc51dk.cloudfront.net/a2/medium.jpg"}, "permalink": {"href": "https://www.artsy.net/artwork/a2"}}},
+    ]}}
+    class FakeClient:
+        def __init__(self, *args, **kwargs): request_seen["headers"] = kwargs.get("headers")
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs):
+            request_seen["url"] = url
+            request_seen["params"] = kwargs.get("params")
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+    monkeypatch.setattr(sources.httpx, "AsyncClient", FakeClient)
+    import asyncio
+    works = asyncio.run(sources.ArtsyProvider().search("Yayoi Kusama", limit=6))
+    assert len(works) == 1
+    assert works[0].artist == "Yayoi Kusama"
+    assert request_seen["url"].endswith("/artworks")
+    assert request_seen["params"]["partner_id"] == "partner-123"
+    assert request_seen["params"]["published"] == "true"
+
+
+def test_deduplication_preserves_distinct_untitled_works_by_same_artist():
+    from services.agent import _dedupe_artworks
+    from services.art_sources import Artwork
+    base = dict(artist="Yayoi Kusama", detail_url="https://www.artsy.net/artwork/example", source="Artsy", source_kind="commercial", availability="available", price=None, currency=None, medium=None, dimensions=None, year=None, description=None)
+    works = [
+        Artwork(id="artsy:1", title="Untitled", image_url="https://d32dm0rphc51dk.cloudfront.net/one/large.jpg", **base),
+        Artwork(id="artsy:2", title="Untitled", image_url="https://d32dm0rphc51dk.cloudfront.net/two/large.jpg", **base),
+        Artwork(id="artsy:3", title="Tsumari in Bloom", image_url="https://d32dm0rphc51dk.cloudfront.net/three/large.jpg", **base),
+        Artwork(id="met:4", title="Tsumari in Bloom", image_url="https://images.metmuseum.org/three.jpg", **{**base, "source": "Met", "source_kind": "institution", "availability": "not_for_sale"}),
+    ]
+    assert [work.id for work in _dedupe_artworks(works)] == ["artsy:1", "artsy:2", "artsy:3"]

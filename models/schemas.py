@@ -71,7 +71,7 @@ class ConciergeRequest(BaseModel):
     discovery_level: int = Field(default=50, ge=0, le=100)
     purchase_required: bool = False
     goal: str | None = Field(default=None, max_length=500)
-    number_of_works: int = Field(default=1, ge=1, le=8)
+    number_of_works: int = Field(default=3, ge=1, le=3)
     feedback: str | None = Field(default=None, max_length=500)
     exclude_artwork_ids: list[str] = Field(default_factory=list, max_length=20)
     inspiration_image_ids: list[str] = Field(default_factory=list, max_length=5)

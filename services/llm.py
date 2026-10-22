@@ -25,7 +25,7 @@ class RequestSignals(BaseModel):
     market: str | None = None
     budget_min: float | None = None
     budget_max: float | None = None
-    number_of_works: int | None = Field(default=None, ge=1, le=8)
+    number_of_works: int | None = Field(default=None, ge=1, le=3)
 
 
 class VisualAnalysis(BaseModel):

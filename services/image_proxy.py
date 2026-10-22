@@ -23,7 +23,6 @@ ALLOWED_HOST_SUFFIXES = (
     ".metmuseum.org",
     ".clevelandart.org",
     ".micr.io",
-    ".rijksmuseum.nl",
     ".cloudinary.com",
     ".shopifycdn.com",
     ".squarespace-cdn.com",
@@ -37,12 +36,11 @@ ALLOWED_DETAIL_HOSTS = {
     "artic.edu", "www.artic.edu",
     "metmuseum.org", "www.metmuseum.org",
     "clevelandart.org", "www.clevelandart.org",
-    "rijksmuseum.nl", "www.rijksmuseum.nl",
     "artsy.net", "www.artsy.net",
     "collect24.art", "www.collect24.art",
 }
 ALLOWED_DETAIL_HOST_SUFFIXES = (
-    ".artic.edu", ".metmuseum.org", ".clevelandart.org", ".rijksmuseum.nl", ".artsy.net", ".artlogic.net", ".collect24.art"
+    ".artic.edu", ".metmuseum.org", ".clevelandart.org", ".artsy.net", ".artlogic.net", ".collect24.art"
 )
 
 

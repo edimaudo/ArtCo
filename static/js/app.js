@@ -505,11 +505,11 @@
     }
 
     if (saved) {
-      const works = state.saved.slice(0, 3);
+      const works = state.saved.slice(0, 6);
       saved.innerHTML = works.map((work) => {
         const id = escapeAttribute(work.id);
         const savedImageUrl = work.display_image_url || work.image_url || artworkPreviewUrl(work.detail_url) || artworkFallbackUrl(work.title, work.artist);
-        const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== work.image_url && work.image_url ? `data-original-src="${escapeAttribute(work.image_url)}"` : ''} ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} ${savedImageUrl === artworkFallbackUrl(work.title, work.artist) ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`;
+        const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== work.image_url && work.image_url ? `data-original-src="${escapeAttribute(work.image_url)}"` : ''} ${work.detail_url && savedImageUrl === artworkPreviewUrl(work.detail_url) ? 'data-tried-detail-preview="true"' : ''} ${savedImageUrl === artworkFallbackUrl(work.title, work.artist) ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(savedImageUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="no-referrer">`;
         return `<button class="saved-thumb" type="button" data-saved-id="${id}" aria-label="Open ${escapeAttribute(work.title || 'saved artwork')}">${image}</button>`;
       }).join('');
       bindArtworkImageFallbacks(saved);
@@ -679,7 +679,7 @@
       discovery_level: state.profile.discoveryLevel,
       purchase_required: inferred === 'buy' || useSavedTaste,
       goal: prompt.trim() || null,
-      number_of_works: inferred === 'curate' ? 3 : 1,
+      number_of_works: 3,
       feedback,
       exclude_artwork_ids: [],
       inspiration_image_ids: [],
@@ -938,28 +938,28 @@
       if (image.dataset.fallbackBound === 'true') return;
       image.dataset.fallbackBound = 'true';
       const advanceFallback = () => {
-        // The source page may publish a working image even when its raw API
-        // thumbnail blocks hotlinking. Try the same-origin page-preview proxy
-        // first, then fall back to the direct image URL.
-        const detailUrl = image.dataset.detailUrl;
-        if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
-          image.dataset.triedDetailPreview = 'true';
-          image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
-          return;
-        }
+        // Use the provider's direct artwork URL first. Generic Open Graph metadata
+        // often points at a square logo or site placeholder rather than the artwork.
         const originalSrc = image.dataset.originalSrc;
         if (originalSrc && image.dataset.triedOriginalSrc !== 'true') {
           image.dataset.triedOriginalSrc = 'true';
           image.src = originalSrc;
           return;
         }
+        // Next search institutional sources for this exact title and artist.
         if (image.dataset.triedImageFallback !== 'true') {
           image.dataset.triedImageFallback = 'true';
           image.src = artworkFallbackUrl(image.dataset.artworkTitle, image.dataset.artworkArtist);
           return;
         }
-        // Do not leave a visible recommendation without an image. Remove a card
-        // only after both source-page recovery and exact-work museum fallback fail.
+        // Only try source-page metadata last because it may be a generic square logo.
+        const detailUrl = image.dataset.detailUrl;
+        if (detailUrl && image.dataset.triedDetailPreview !== 'true') {
+          image.dataset.triedDetailPreview = 'true';
+          image.src = `/api/artwork-preview?url=${encodeURIComponent(detailUrl)}`;
+          return;
+        }
+        // Remove the card if no exact or source-page artwork image can be loaded.
         const card = image.closest('.art-card');
         const savedThumb = image.closest('.saved-thumb');
         if (card) card.remove();
@@ -991,7 +991,7 @@
     const imageDisplayUrl = work.display_image_url || directImageUrl || pagePreviewUrl || artworkFallbackUrl(work.title, work.artist);
     const previewIsInitial = Boolean(pagePreviewUrl && imageDisplayUrl === pagePreviewUrl);
     const fallbackIsInitial = imageDisplayUrl === artworkFallbackUrl(work.title, work.artist);
-    const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} ${fallbackIsInitial ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="strict-origin-when-cross-origin">`;
+    const image = `<img data-artwork-image data-artwork-title="${escapeAttribute(work.title || '')}" data-artwork-artist="${escapeAttribute(work.artist || '')}" data-detail-url="${escapeAttribute(work.detail_url || '')}" ${work.display_image_url && work.display_image_url !== directImageUrl && directImageUrl ? `data-original-src="${escapeAttribute(directImageUrl)}"` : ''} ${previewIsInitial ? 'data-tried-detail-preview="true"' : ''} ${fallbackIsInitial ? 'data-tried-image-fallback="true"' : ''} src="${escapeAttribute(imageDisplayUrl)}" alt="${escapeAttribute(work.title || 'Artwork')} by ${escapeAttribute(work.artist || 'Unknown artist')}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="no-referrer">`;
     const id = escapeAttribute(work.id);
     const linkLabel = available ? 'Buy / enquire' : 'See at source';
     const externalLink = work.detail_url

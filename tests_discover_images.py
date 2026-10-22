@@ -48,7 +48,7 @@ class FakeProvider:
         ]
 
 
-def test_discover_returns_three_total_image_cards_not_a_second_shortlist():
+def test_discover_returns_six_total_image_cards_not_a_second_shortlist():
     async def run_test():
         providers = [FakeProvider("Collection A"), FakeProvider("Collection B"), FakeProvider("Collection C")]
         original = {
@@ -81,7 +81,7 @@ def test_discover_returns_three_total_image_cards_not_a_second_shortlist():
             assert len(result["results"]) == 3
             assert result["not_for_sale"] == []
             visible = result["results"] + result["not_for_sale"]
-            assert len(visible) == 3
+            assert len(visible) == 6
             assert all(item["image_url"].startswith("https://") for item in visible)
             assert all(len(provider.calls) == 1 for provider in providers), "each provider should receive only one query in the first pass"
         finally:

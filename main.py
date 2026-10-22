@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 from difflib import SequenceMatcher
 import re
 import time
+from io import BytesIO
 from html.parser import HTMLParser
 
 import httpx
@@ -22,6 +23,7 @@ from services.concierge import run
 from services.payments import PaymentUnavailable, PaymentConfigurationError, CheckoutSessionNotFound, create_checkout_session, retrieve_checkout_session, parse_webhook, verify_webhook_signature
 from services.image_proxy import display_image_url, is_allowed_detail_url, is_allowed_image_url
 from services.config import REQUEST_TIMEOUT
+from PIL import Image, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
@@ -143,21 +145,47 @@ MAX_PROXY_IMAGE_BYTES = 8 * 1024 * 1024
 _PROXY_REDIRECT_CODES = {301, 302, 303, 307, 308}
 
 def _sniff_image_media_type(declared_type: str, payload: bytes) -> str | None:
-    """Accept valid image bytes from providers that label them octet-stream."""
-    media_type = (declared_type or "").split(";", 1)[0].strip().lower()
-    if media_type.startswith("image/"):
-        return media_type
+    """Validate raster image bytes instead of trusting a potentially misleading MIME header.
+
+    Page errors and generic SVG logos are a common source of square placeholders. The
+    artwork UI expects photographic/raster collection images, so HTML and SVG are not
+    accepted as artwork thumbnails even if an upstream server labels them image/*.
+    """
+    if not payload or len(payload) < 64:
+        return None
+    leading = payload.lstrip()[:512].lower()
+    if b"<html" in leading or b"<!doctype html" in leading or b"<svg" in leading:
+        return None
+    if leading.startswith(b"<?xml") and b"<svg" in leading:
+        return None
+
+    magic_type = None
     if payload.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if payload.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
-        return "image/webp"
-    if len(payload) >= 12 and payload[4:8] == b"ftyp" and payload[8:12] in {b"avif", b"avis"}:
+        magic_type = "image/jpeg"
+    elif payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        magic_type = "image/png"
+    elif payload.startswith((b"GIF87a", b"GIF89a")):
+        magic_type = "image/gif"
+    elif len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        magic_type = "image/webp"
+    elif len(payload) >= 12 and payload[4:8] == b"ftyp" and payload[8:12] in {b"avif", b"avis"}:
+        # AVIF decoding is not available in every Pillow build; the BMFF signature
+        # is specific enough to preserve valid AVIF collection imagery.
         return "image/avif"
-    return None
+    if not magic_type:
+        return None
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            image.verify()
+        with Image.open(BytesIO(payload)) as image:
+            width, height = image.size
+            if width < 64 or height < 64:
+                return None
+            decoded_format = (image.format or "").lower()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        return None
+    format_type = {"jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}.get(decoded_format)
+    return format_type if format_type == magic_type else None
 
 
 
@@ -261,9 +289,9 @@ async def artwork_preview_from_source(url: str) -> Response:
             parser = _ArtworkImageMetadataParser()
             parser.feed(page.text)
             page_base = str(page.url or url)
-            ordered_candidates = list(parser.candidates) + [
+            ordered_candidates = [
                 candidate for _, candidate in sorted(parser.inline_candidates, key=lambda item: item[0], reverse=True)
-            ]
+            ] + list(parser.candidates)
             seen: set[str] = set()
             for candidate in ordered_candidates:
                 candidate_url = urljoin(page_base, candidate.strip())
@@ -408,11 +436,13 @@ async def artwork_image_fallback(title: str = "", artist: str = "") -> Response:
     cached = _ARTWORK_IMAGE_FALLBACK_CACHE.get(key)
     image_url = cached[1] if cached and cached[0] > time.time() else ""
     if not image_url:
-        from services.art_sources import ArtInstituteProvider, MetProvider, ClevelandProvider
+        from services.art_sources import (
+            ArtInstituteProvider, MetProvider, ClevelandProvider,
+        )
         query = " ".join(part for part in (clean_title, clean_artist) if part and not part.casefold().startswith("unknown"))
         providers = [ArtInstituteProvider(), MetProvider(), ClevelandProvider()]
         results = await asyncio.gather(
-            *(asyncio.wait_for(provider.search(query, limit=4), timeout=6.0) for provider in providers),
+            *(asyncio.wait_for(provider.search(query, limit=3), timeout=6.0) for provider in providers),
             return_exceptions=True,
         )
         candidates = []
@@ -451,6 +481,16 @@ async def diagnostics() -> dict[str, Any]:
         "gemini": {
             "configured": bool(config.GEMINI_API_KEY),
             "model": config.GEMINI_MODEL,
+        },
+        "institutional_sources": {
+            "art_institute_of_chicago": {"configured": True, "requires": []},
+            "metropolitan_museum_of_art": {"configured": True, "requires": []},
+            "cleveland_museum_of_art": {"configured": True, "requires": []},
+            "geographic_policy": {
+                "allowed_regions": ["Canada", "United States"],
+                "canadian_image_sources_configured": False,
+                "active_fallback_region": "United States",
+            },
         },
         "commercial_sources": {
             "artsy": {
@@ -566,9 +606,8 @@ async def concierge(payload: ConciergeRequest) -> JSONResponse:
         )
         if result.get("success") is False:
             return JSONResponse(result, status_code=503)
-        # Enforce the visible-card limit at the API boundary as well as in the
-        # agent and UI. This prevents a stale/alternate agent response from
-        # rendering a second shortlist beneath the primary three cards.
+        # Enforce the three-card visible limit at the API boundary as well as
+        # in the agent and UI so stale/alternate responses cannot over-render.
         primary = list(result.get("results") or [])[:3]
         remaining = max(0, 3 - len(primary))
         secondary = list(result.get("not_for_sale") or [])[:remaining] if payload.intent.value == "buy" else []
