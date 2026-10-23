@@ -62,6 +62,51 @@ class CandidateReview(BaseModel):
     coverage: str = ""
 
 
+class LearningTerm(BaseModel):
+    term: str = Field(default="", max_length=80)
+    definition: str = Field(default="", max_length=280)
+
+
+class LearningMajorWork(BaseModel):
+    title: str = Field(default="", max_length=180)
+    period: str = Field(default="", max_length=80)
+    significance: str = Field(default="", max_length=360)
+
+
+class LearningGuideDraft(BaseModel):
+    """Text-only learning content; major works are examples, never recommendation cards."""
+
+    artist_name: str | None = Field(default=None, max_length=120)
+    overview: str = Field(default="", max_length=1600)
+    key_ideas: list[str] = Field(default_factory=list, max_length=5)
+    look_closer: list[str] = Field(default_factory=list, max_length=5)
+    terms: list[LearningTerm] = Field(default_factory=list, max_length=5)
+    questions: list[str] = Field(default_factory=list, max_length=4)
+    major_works: list[LearningMajorWork] = Field(default_factory=list, max_length=5)
+    source_note: str = Field(default="", max_length=360)
+
+
+async def generate_learning_guide(user_request: str) -> LearningGuideDraft | None:
+    """Generate a factual, text-only art learning guide for the written topic."""
+    if not user_request or not user_request.strip() or not GEMINI_API_KEY:
+        return None
+
+    prompt = f"""Create a concise, accurate educational guide for this ArtCo Learn about art request.
+User request: {user_request.strip()[:500]}
+
+Return a structured JSON guide. The user's request may name an artist, one artwork, or a broad art topic.
+- If an artist is named or clearly intended, set artist_name to that artist's commonly used full name and make the overview explain who they are, their context, media, and distinguishing artistic concerns.
+- If a specific artwork is mentioned, address it in the overview when reliable, then explain the artist's broader practice as context.
+- When an artist is named, provide 3 to 5 of their best-known, well-established works in major_works. Each entry needs the commonly accepted title, an approximate period/year only when confident, and one sentence explaining why the work matters or what to notice. Include works across a representative range when appropriate.
+- Do not include images, source records, purchase links, or artwork recommendation cards. These are educational text examples only.
+- Do not invent artwork titles, exact dates, or attributions. If an artist or title is ambiguous, be cautious and avoid uncertain examples. Never invent biographical facts.
+- If no artist is named, artist_name should be null and major_works should be empty unless specific works are essential to the topic.
+- Keep 3 to 5 key_ideas, 3 to 5 look_closer prompts, 3 to 5 useful terms, and 2 to 4 questions. Make them concrete and artist/topic-specific rather than generic filler.
+- In source_note, tell the reader to verify exact titles, dates, media, and attributions with reliable museum or artist-foundation records.
+""".strip()
+    return await _generate_structured(LearningGuideDraft, prompt)
+
+
 def _extract_json_object(text: str) -> dict[str, Any] | None:
     match = re.search(r"\{.*\}", text or "", flags=re.DOTALL)
     if not match:

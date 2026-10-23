@@ -9,7 +9,7 @@ from typing import Any
 from models.schemas import ConciergeRequest
 from .art_sources import Artwork, commercial_providers, institutional_providers, _normalise_image_url, _usable_image_url
 from .image_proxy import display_image_url, is_allowed_detail_url, is_allowed_image_url
-from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, plan_art_searches
+from .llm import CandidateReview, RequestSignals, analyze_inspiration_images, extract_request_signals, generate_learning_guide, plan_art_searches
 from .qloo import get_artist_insights, search_entities
 from .payments import checkout_catalog_entry
 from . import config
@@ -752,6 +752,109 @@ _LEARNING_TOPICS: dict[str, dict[str, Any]] = {
     },
 }
 
+
+_LEARNING_ARTIST_NAMES: dict[str, str] = {
+    "claude monet": "Claude Monet", "monet": "Claude Monet",
+    "vincent van gogh": "Vincent van Gogh", "van gogh": "Vincent van Gogh",
+    "pablo picasso": "Pablo Picasso", "picasso": "Pablo Picasso",
+    "frida kahlo": "Frida Kahlo", "rembrandt": "Rembrandt van Rijn",
+    "yayoi kusama": "Yayoi Kusama", "georgia o keeffe": "Georgia O’Keeffe",
+    "jackson pollock": "Jackson Pollock", "mark rothko": "Mark Rothko",
+    "andy warhol": "Andy Warhol",
+}
+
+_LEARNING_MAJOR_WORKS: dict[str, list[dict[str, str]]] = {
+    "Claude Monet": [
+        {"title": "Impression, Sunrise", "period": "1872", "significance": "Its loose handling of light and atmosphere became central to the story of Impressionism."},
+        {"title": "Haystacks", "period": "1890–91 series", "significance": "Repeated studies of the same motif show how time, weather, and light alter colour and appearance."},
+        {"title": "Rouen Cathedral", "period": "1890s series", "significance": "Different conditions of light turn the cathedral façade into a study of changing colour and atmosphere."},
+        {"title": "Water Lilies", "period": "c. 1890s–1920s", "significance": "The pond at Giverny becomes an expansive field of reflections, colour, and increasingly abstracted space."},
+    ],
+    "Vincent van Gogh": [
+        {"title": "The Starry Night", "period": "1889", "significance": "Swirling sky, strong rhythm, and intense colour make the landscape feel emotionally charged."},
+        {"title": "Sunflowers", "period": "1888–89 series", "significance": "Thick paint and a concentrated yellow palette turn a familiar floral subject into a study of colour and vitality."},
+        {"title": "The Bedroom", "period": "1888 and later versions", "significance": "Simplified perspective and bold areas of colour give an everyday interior a distinctive visual energy."},
+        {"title": "The Potato Eaters", "period": "1885", "significance": "A dark, earthy palette and carefully staged figures reflect Van Gogh’s early focus on rural life and labour."},
+    ],
+    "Pablo Picasso": [
+        {"title": "Les Demoiselles d’Avignon", "period": "1907", "significance": "Its fractured forms and challenging viewpoints are often discussed as a turning point toward Cubism."},
+        {"title": "Guernica", "period": "1937", "significance": "Monochrome figures, distortion, and compressed space convey the horror of war and civilian suffering."},
+        {"title": "Girl before a Mirror", "period": "1932", "significance": "Contrasting profiles, colours, and patterned forms complicate the relationship between a person and her reflection."},
+        {"title": "Three Musicians", "period": "1921", "significance": "Flat, sharply divided shapes demonstrate how Cubist principles could create a legible yet fragmented scene."},
+    ],
+    "Frida Kahlo": [
+        {"title": "The Two Fridas", "period": "1939", "significance": "Two versions of the artist sit side by side, inviting readings of identity, separation, and self-representation."},
+        {"title": "Self-Portrait with Thorn Necklace and Hummingbird", "period": "1940", "significance": "Portrait, plants, animals, and bodily discomfort combine in a highly symbolic self-image."},
+        {"title": "Henry Ford Hospital", "period": "1932", "significance": "A stark, autobiographical composition uses a bed, body, and floating objects to convey physical and emotional pain."},
+        {"title": "Self-Portrait with Cropped Hair", "period": "1940", "significance": "Clothing, haircut, and posture make gender presentation and self-fashioning central to the image."},
+    ],
+    "Rembrandt van Rijn": [
+        {"title": "The Night Watch", "period": "1642", "significance": "Dramatic lighting, movement, and varied poses transform a civic guard portrait into a dynamic group scene."},
+        {"title": "The Anatomy Lesson of Dr Nicolaes Tulp", "period": "1632", "significance": "A carefully directed group composition links portraiture with public demonstration and scientific learning."},
+        {"title": "The Jewish Bride", "period": "c. 1665–69", "significance": "Subtle light, tactile paint, and expressive gestures make intimacy central to the painting."},
+        {"title": "Self-Portraits", "period": "throughout his career", "significance": "The changing series provides an unusually sustained study of expression, identity, age, and painterly technique."},
+    ],
+    "Yayoi Kusama": [
+        {"title": "Infinity Mirror Room—Phalli’s Field", "period": "1965", "significance": "Soft repeated forms and mirrors multiply across the room, making the viewer part of an enveloping pattern."},
+        {"title": "Narcissus Garden", "period": "first presented in 1966", "significance": "Reflective spheres repeat the surrounding environment and raise questions about spectacle, participation, and the art market."},
+        {"title": "Infinity Mirrored Room—The Souls of Millions of Light Years Away", "period": "2013", "significance": "Mirrored space and points of light produce a seemingly endless environment that alters the viewer’s sense of scale."},
+        {"title": "Pumpkin", "period": "recurring motif from the 1940s onward", "significance": "The pumpkin appears across painting, sculpture, and installation, often combined with Kusama’s repeating dots and patterns."},
+        {"title": "Infinity Mirrored Room—All the Eternal Love I Have for the Pumpkins", "period": "2016", "significance": "Illuminated pumpkin forms and mirrored surfaces bring a familiar motif into an immersive environment."},
+    ],
+    "Georgia O’Keeffe": [
+        {"title": "Black Iris III", "period": "1926", "significance": "An enlarged flower fills the picture, shifting attention toward shape, colour, and close looking."},
+        {"title": "Jimson Weed/White Flower No. 1", "period": "1932", "significance": "A monumental white flower and precise cropping make scale and abstraction central to a natural subject."},
+        {"title": "Cow’s Skull: Red, White, and Blue", "period": "1931", "significance": "A bleached skull against a banded sky connects close observation of nature with an emblematic American landscape."},
+        {"title": "Sky Above Clouds IV", "period": "1965", "significance": "Repeated cloud forms and a vast aerial viewpoint turn landscape into a near-abstract field of pattern."},
+    ],
+    "Jackson Pollock": [
+        {"title": "Mural", "period": "1943", "significance": "A large, energetic composition marks a transition toward the all-over rhythms of Pollock’s mature work."},
+        {"title": "Number 1A, 1948", "period": "1948", "significance": "Dripped, poured, and layered paint draws attention to gesture and the process of making."},
+        {"title": "Autumn Rhythm (Number 30)", "period": "1950", "significance": "Dense lines spread across a large canvas without a single focal point, making rhythm and movement central."},
+        {"title": "Blue Poles", "period": "1952", "significance": "Intersecting, high-contrast marks organize a complex field of drips, lines, and layered colour."},
+    ],
+    "Mark Rothko": [
+        {"title": "No. 61 (Rust and Blue)", "period": "1953", "significance": "Soft-edged colour fields interact to create tension and depth without depicting a recognisable subject."},
+        {"title": "Orange and Yellow", "period": "1956", "significance": "Large luminous colour areas make scale, edge, and adjacent hues central to the viewing experience."},
+        {"title": "No. 14, 1960", "period": "1960", "significance": "Broad contrasting fields invite sustained attention to colour relationships and the way the surface seems to glow."},
+        {"title": "Black on Maroon", "period": "1958", "significance": "A restrained palette and monumental scale show the atmospheric effect of subtle colour and edge changes."},
+    ],
+    "Andy Warhol": [
+        {"title": "Campbell’s Soup Cans", "period": "1962", "significance": "Serial images of commercial packaging challenge distinctions between everyday design and fine art."},
+        {"title": "Marilyn Diptych", "period": "1962", "significance": "Repeated celebrity imagery shifts between vivid colour and fading monochrome, suggesting circulation and repetition."},
+        {"title": "Brillo Boxes", "period": "1964", "significance": "Replicas of commercial cartons question how display and context change an object’s status as art."},
+        {"title": "Gold Marilyn Monroe", "period": "1962", "significance": "A celebrity portrait is placed on a gold ground, joining fame, mass reproduction, and icon-like display."},
+    ],
+}
+
+
+def _mentioned_artist_name(goal: str | None) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]+", " ", (goal or "").casefold()).strip()
+    for alias in sorted(_LEARNING_ARTIST_NAMES, key=len, reverse=True):
+        if re.search(rf"(?:^| ){re.escape(alias)}(?:$| )", normalized):
+            return _LEARNING_ARTIST_NAMES[alias]
+    # A cautious fallback for unfamiliar artists when Gemini is unavailable. This
+    # extracts a name after common request wording but does not treat arbitrary
+    # movement/topic phrases as artists.
+    raw = re.sub(r"\s+", " ", (goal or "")).strip()
+    patterns = (
+        r"(?i:\b(?:learn about|tell me about|teach me about|explain|who is|who was|works? of|art of|artist))\s+([A-Z][\w.’'-]*(?:\s+[A-Z][\w.’'-]*){0,3})",
+        r"(?i:\bby)\s+([A-Z][\w.’'-]*(?:\s+[A-Z][\w.’'-]*){0,3})",
+        r"^([A-Z][\w.’'-]*(?:\s+[A-Z][\w.’'-]*){0,3})(?=\s*(?:and\b|[:,;.!?]|$))",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            candidate = re.split(r"\s+(?:and|with|including|plus|about|his|her|their|main|notable|major)\s+|[:,;.!?]", match.group(1), maxsplit=1, flags=re.I)[0].strip()
+            normalized_candidate = re.sub(r"[^a-z0-9]+", " ", candidate.casefold()).strip()
+            # Do not mistake named movements, mediums, or concepts for people.
+            if any(key == normalized_candidate or key in normalized_candidate.split() for key in _LEARNING_TOPICS):
+                continue
+            if candidate and len(candidate) <= 100:
+                return " ".join(part[:1].upper() + part[1:] for part in candidate.split())
+    return None
+
+
 def _learning_topic_label(goal: str | None) -> str:
     raw = re.sub(r"\s+", " ", (goal or "Art history")).strip(" .?!")
     raw = re.sub(r"^(?:please\s+)?(?:explain|teach me about|tell me about|help me understand|who is|who was|what is|what are|learn about|show me|describe)\s+", "", raw, flags=re.I)
@@ -769,8 +872,24 @@ def _build_learning_guide(goal: str | None, works: list[Artwork]) -> dict[str, A
             "look_closer": ["Describe three visible details before deciding what a work means.", "Compare one formal choice across two works, such as colour, scale or material.", "Open the source record to check the work's title, date, medium and any available context."],
             "terms": [{"term": "Context", "definition": "The historical, social and display circumstances around a work."}, {"term": "Formal analysis", "definition": "Looking closely at composition, colour, line, space, material and technique."}, {"term": "Interpretation", "definition": "An explanation built from visual evidence and context, rather than guesswork."}],
         }
+    artist_name = _mentioned_artist_name(goal)
+    major_works = list(_LEARNING_MAJOR_WORKS.get(artist_name or "", []))[:5]
+    # A static artist profile may match a surname, so use that profile's canonical
+    # artist name to look up the curated examples as well.
+    if not major_works and artist_name:
+        for canonical, aliases in {
+            "Claude Monet": ("claude monet", "monet"),
+            "Vincent van Gogh": ("vincent van gogh", "van gogh"),
+            "Pablo Picasso": ("pablo picasso", "picasso"),
+            "Frida Kahlo": ("frida kahlo",),
+            "Rembrandt van Rijn": ("rembrandt",),
+        }.items():
+            if artist_name == canonical and any(alias in normalized for alias in aliases):
+                major_works = list(_LEARNING_MAJOR_WORKS.get(canonical, []))[:5]
+                break
     return {
         "topic": topic,
+        "artist_name": artist_name,
         "overview": profile["overview"],
         "key_ideas": list(profile["key_ideas"]),
         "look_closer": list(profile["look_closer"]),
@@ -780,13 +899,48 @@ def _build_learning_guide(goal: str | None, works: list[Artwork]) -> dict[str, A
             "What changes when I compare this work with another example?",
             "Which claims need confirmation from the artist, museum or collection record?",
         ],
+        "major_works": major_works,
         "related_works": [{
             "id": work.id, "title": work.title, "artist": work.artist,
             "medium": work.medium, "year": work.year, "source": work.source,
             "detail_url": work.detail_url,
         } for work in works[:3]],
-        "source_note": "Use each collection or seller record to verify artwork-specific dates, materials and provenance. The examples below are works returned by this search, not a claim that every one belongs to the named movement.",
+        "source_note": "This is an educational starting point. Verify exact titles, dates, media, and attributions with reliable museum or artist-foundation records. Where search examples are present, they are works returned by this search, not a claim that every one belongs to the named movement.",
     }
+
+
+async def _build_learning_guide_async(goal: str | None) -> dict[str, Any]:
+    """Use generated artist-aware content when configured; otherwise use curated profiles."""
+    guide = _build_learning_guide(goal, [])
+    # Static curated profiles provide a predictable fallback. For artists not
+    # covered in those profiles, use the configured language model to identify the
+    # artist and provide notable works without invoking any artwork catalogue.
+    if not config.GEMINI_API_KEY:
+        return guide
+    try:
+        draft = await generate_learning_guide(goal or "")
+    except Exception as exc:
+        logger.warning("Learning guide generation failed (%s); using curated fallback", type(exc).__name__)
+        return guide
+    if draft is None:
+        return guide
+    generated = draft.model_dump() if hasattr(draft, "model_dump") else dict(draft)
+    artist_name = guide.get("artist_name") or generated.get("artist_name")
+    major_works = guide.get("major_works") or generated.get("major_works") or []
+    # The curated list takes priority for artists we explicitly cover; generated
+    # guides fill the gaps for other named artists and broad topics.
+    guide.update({
+        "artist_name": artist_name,
+        "overview": generated.get("overview") or guide["overview"],
+        "key_ideas": generated.get("key_ideas") or guide["key_ideas"],
+        "look_closer": generated.get("look_closer") or guide["look_closer"],
+        "terms": [item.model_dump() if hasattr(item, "model_dump") else item for item in generated.get("terms", [])] or guide["terms"],
+        "questions": generated.get("questions") or guide["questions"],
+        "major_works": major_works[:5],
+        "related_works": [],
+        "source_note": generated.get("source_note") or guide["source_note"],
+    })
+    return guide
 
 
 async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
@@ -811,7 +965,7 @@ async def run_concierge(request: ConciergeRequest) -> dict[str, Any]:
     # The UI requires a written topic and hides image uploads for this service. This
     # backend guard also handles stale clients without failing the guide.
     if request.intent.value == "learn":
-        guide = _build_learning_guide(request.goal, [])
+        guide = await _build_learning_guide_async(request.goal)
         status.append({"label": "Learning guide generated", "state": "done"})
         if ignored_learning_images:
             status.append({"label": "Image payload ignored for Learn about art", "state": "warning"})

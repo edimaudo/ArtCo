@@ -136,7 +136,7 @@ def test_checkout_return_page_never_claims_payment_before_verification():
     assert 'data-checkout-status="verify"' in response.text
     assert "the Checkout Session with Stripe" in response.text
     assert "Your checkout is complete." not in response.text
-    assert "/static/js/app.js?v=20261021-na-museum-three-results" in response.text
+    assert "/static/js/app.js?v=20261022-learn-artist-guide" in response.text
 
 
 def test_stripe_session_retrieval_uses_authenticated_stripe_api(monkeypatch):
@@ -589,3 +589,61 @@ def test_learning_service_is_text_driven_and_never_searches_or_recommends_works(
     assert result["learning_guide"]["topic"] == "Tsumari in Bloom by Yayoi Kusama"
     assert result["results"] == []
     assert result["total_found"] == 0
+
+
+def test_learning_guide_includes_named_artist_and_major_works_without_cards():
+    guide = agent._build_learning_guide("Tell me about Yayoi Kusama and some of her main works", [])
+    assert guide["artist_name"] == "Yayoi Kusama"
+    assert len(guide["major_works"]) >= 3
+    assert any("Narcissus Garden" == work["title"] for work in guide["major_works"])
+    assert guide["related_works"] == []
+
+
+def test_learn_uses_generated_content_for_artist_not_in_static_profiles(monkeypatch):
+    from services.llm import LearningGuideDraft, LearningMajorWork, LearningTerm
+
+    async def fake_generate(_request):
+        return LearningGuideDraft(
+            artist_name="Kehinde Wiley",
+            overview="Kehinde Wiley is an American portrait painter known for placing contemporary subjects in dialogue with historic European portraiture.",
+            key_ideas=["Portraiture and power", "Historic visual references", "Pattern and background"],
+            look_closer=["Compare the sitter's pose with traditional portraits", "Notice the ornamental setting", "Consider who is represented"],
+            terms=[LearningTerm(term="Portraiture", definition="Art depicting a person or group.")],
+            questions=["Who is represented?", "What traditions are being referenced?"],
+            major_works=[LearningMajorWork(title="Napoleon Leading the Army over the Alps", period="2005", significance="Recasts a famous equestrian portrait with a contemporary Black subject.")],
+            source_note="Verify exact titles and dates with reliable collection records.",
+        )
+
+    monkeypatch.setattr(agent.config, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(agent, "generate_learning_guide", fake_generate)
+    monkeypatch.setattr(agent, "_research", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Learn must not search catalogues")))
+    result = asyncio.run(agent.run_concierge(ConciergeRequest(intent="learn", goal="Tell me about Kehinde Wiley and his main works")))
+    assert result["learning_guide"]["artist_name"] == "Kehinde Wiley"
+    assert result["learning_guide"]["major_works"][0]["title"] == "Napoleon Leading the Army over the Alps"
+    assert result["results"] == []
+    assert result["learning_guide"]["related_works"] == []
+
+
+def test_learning_template_and_renderer_show_text_only_major_works():
+    html = (ROOT / "templates/results.html").read_text()
+    js = (ROOT / "static/js/app.js").read_text()
+    css = (ROOT / "static/css/style.css").read_text()
+    assert 'id="learningArtistWorksSection"' in html
+    assert 'id="learningMajorWorksList"' in html
+    assert "Selected works by ${guide.artist_name}" in js
+    assert "work.significance" in js
+    assert ".learning-major-works-list li" in css
+    assert "results" in js
+
+
+def test_learning_guide_does_not_mistake_named_art_movements_for_artists():
+    guide = agent._build_learning_guide("Explain abstract expressionism", [])
+    assert guide["artist_name"] is None
+    assert guide["major_works"] == []
+
+
+def test_named_artist_heuristic_supports_common_prompt_forms():
+    assert agent._mentioned_artist_name("Learn about Kehinde Wiley") == "Kehinde Wiley"
+    assert agent._mentioned_artist_name("Kehinde Wiley and his main works") == "Kehinde Wiley"
+    assert agent._mentioned_artist_name("Tsumari in Bloom by Yayoi Kusama") == "Yayoi Kusama"
+    assert agent._mentioned_artist_name("Explain abstract expressionism") is None

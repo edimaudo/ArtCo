@@ -1033,6 +1033,18 @@
     section.hidden = false;
     $('#learningGuideTopic').textContent = guide.topic ? `A starting point: ${guide.topic}` : 'A starting point for exploring the subject';
     $('#learningGuideOverview').textContent = guide.overview;
+    const artistWorksSection = $('#learningArtistWorksSection');
+    const artistWorksHeading = $('#learningArtistWorksHeading');
+    const artistWorksList = $('#learningMajorWorksList');
+    const majorWorks = Array.isArray(guide.major_works) ? guide.major_works.slice(0, 5) : [];
+    if (artistWorksSection && artistWorksList) {
+      artistWorksSection.hidden = !guide.artist_name || majorWorks.length === 0;
+      if (artistWorksHeading) artistWorksHeading.textContent = guide.artist_name ? `Selected works by ${guide.artist_name}` : 'Selected works';
+      artistWorksList.innerHTML = majorWorks.map((work) => {
+        const meta = work.period ? `<small>${escapeHtml(work.period)}</small>` : '';
+        return `<li><strong>${escapeHtml(work.title || '')}</strong>${meta}<span>${escapeHtml(work.significance || '')}</span></li>`;
+      }).join('');
+    }
     const list = (id, values) => {
       const node = $(`#${id}`);
       if (node) node.innerHTML = (values || []).map((value) => `<li>${escapeHtml(value)}</li>`).join('');

@@ -54,7 +54,7 @@ a { color: inherit; }
 .topbar--landing { grid-template-columns: 1fr auto; }
 .brand {
   justify-self: start;
-  font-size: 1.5rem;
+  font-size: .84rem;
   font-weight: 700;
   letter-spacing: .16em;
   text-decoration: none;
@@ -1348,6 +1348,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .learning-term { margin: 0 0 12px; }
 .learning-term dt { font-weight: 650; margin-bottom: 3px; }
 .learning-term dd { margin: 0; line-height: 1.5; color: var(--muted, #5d5a56); }
+.learning-major-works { margin: 20px 0 24px; padding: 0 0 2px; }
+.learning-major-works h3 { margin: 0 0 10px; font-size: 1.03rem; }
+.learning-major-works-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+.learning-major-works-list li { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; padding: 12px 0; border-top: 1px solid var(--border, #dedbd5); }
+.learning-major-works-list li strong { line-height: 1.4; }
+.learning-major-works-list li small { color: var(--muted, #5d5a56); text-align: right; white-space: nowrap; }
+.learning-major-works-list li span { grid-column: 1 / -1; line-height: 1.5; color: var(--muted, #5d5a56); font-size: .92rem; }
 .learning-examples { margin-top: 23px; border-top: 1px solid var(--border, #dedbd5); padding-top: 18px; }
 .learning-examples-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .learning-example { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 13px; border: 1px solid var(--border, #dedbd5); border-radius: 12px; min-width: 0; }
@@ -1362,7 +1369,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .checkout-order-row dd { margin: 0; overflow-wrap: anywhere; }
 #checkoutStatusReference { font-size: .82rem; color: var(--muted, #5d5a56); overflow-wrap: anywhere; }
 @media (max-width: 700px) {
-  .learning-guide-grid, .learning-examples-list { grid-template-columns: minmax(0, 1fr); }
+  .learning-guide-grid, .learning-examples-list, .learning-major-works-list { grid-template-columns: minmax(0, 1fr); }
   .checkout-order-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
